@@ -2,121 +2,173 @@ package engine
 
 import (
 	"os"
-	"path/filepath"
+	"slices"
 
 	"github.com/gtindo/changes-view/internal/review"
 )
 
+// lineOwners maps a final path to, per line, the state (commit or
+// WORKTREE) that last wrote that line.
+type lineOwners map[string]map[int]string
+
 // attribute records, for every final-state line the change adds, the commit
 // (or WORKTREE) that last wrote it, by replaying each step's diff in order.
 // It only runs when the change spans more than one state.
-func (e *Engine) attribute(s *RepoState) {
-	steps := make([]string, 0, len(s.Commits)+1)
-	for i := len(s.Commits) - 1; i >= 0; i-- {
-		steps = append(steps, s.Commits[i])
-	}
+func (s *RepoState) attribute() {
+	steps := slices.Clone(s.Commits)
+	slices.Reverse(steps)
 	if s.Worktree {
 		steps = append(steps, review.Worktree)
 	}
+
 	if len(steps) < 2 {
 		return
 	}
 
-	owners := map[string]map[int]string{}
+	owners := lineOwners{}
 	from := s.Initial
 	for _, step := range steps {
-		to := step
-		if step == review.Worktree {
-			to = ""
-		}
-		out, err := s.Git.Diff(from, to)
+		files, err := s.stepDiff(from, step)
 		if err != nil {
 			return
 		}
-		files := ParseDiff(string(out))
-		if step == review.Worktree {
-			if untracked, err := s.Git.Untracked(); err == nil {
-				for _, p := range untracked {
-					data, err := os.ReadFile(filepath.Join(s.Abs, filepath.FromSlash(p)))
-					if err != nil || IsBinary(data) {
-						continue
-					}
-					if n := len(SplitLines(data)); n > 0 {
-						files = append(files, &FileDiff{Path: p, Status: DiffAdded, Hunks: []*Hunk{{NewStart: 1, NewCount: n}}})
-					}
-				}
-			}
-		}
-		for _, fd := range files {
-			prev := owners[fd.OldPath]
-			if fd.OldPath == "" {
-				prev = nil
-			}
-			next := map[int]string{}
-			for line, owner := range prev {
-				if n, ok := shiftLine(fd.Hunks, line); ok {
-					next[n] = owner
-				}
-			}
-			for _, h := range fd.Hunks {
-				for l := h.NewStart; l <= h.NewEnd(); l++ {
-					next[l] = step
-				}
-			}
-			if fd.OldPath != "" {
-				delete(owners, fd.OldPath)
-			}
-			if fd.Path != "" {
-				owners[fd.Path] = next
-			}
-		}
+
+		owners.replay(files, step)
 		if step != review.Worktree {
 			from = step
 		}
 	}
+
 	s.owners = owners
+}
+
+// stepDiff is the diff one step of the change made on top of from. A
+// WORKTREE step diffs the working tree and includes untracked files.
+func (s *RepoState) stepDiff(from, step string) ([]*FileDiff, error) {
+	to := step
+	if step == review.Worktree {
+		to = ""
+	}
+
+	out, err := s.Git.Diff(from, to)
+	if err != nil {
+		return nil, err
+	}
+
+	files := ParseDiff(string(out))
+	if step != review.Worktree {
+		return files, nil
+	}
+
+	return append(files, s.untrackedAdditions()...), nil
+}
+
+// untrackedAdditions lists untracked text files as whole-file additions.
+// Attribution is best effort, so files that cannot be listed or read are
+// left out instead of failing the run.
+func (s *RepoState) untrackedAdditions() []*FileDiff {
+	untracked, err := s.Git.Untracked()
+	if err != nil {
+		return nil
+	}
+
+	var additions []*FileDiff
+	for _, file := range untracked {
+		data, err := os.ReadFile(s.diskPath(file))
+		if err != nil {
+			continue
+		}
+
+		addition := untrackedDiff(file, data)
+		if len(addition.Hunks) == 0 {
+			continue
+		}
+
+		additions = append(additions, addition)
+	}
+
+	return additions
+}
+
+// replay applies one step's file diffs: lines the step leaves alone keep
+// their owner at their shifted position, and lines it adds belong to step.
+func (o lineOwners) replay(files []*FileDiff, step string) {
+	for _, fileDiff := range files {
+		next := map[int]string{}
+		for line, owner := range o[fileDiff.OldPath] {
+			if shifted, ok := shiftLine(fileDiff.Hunks, line); ok {
+				next[shifted] = owner
+			}
+		}
+
+		for _, hunk := range fileDiff.Hunks {
+			for line := hunk.NewStart; line <= hunk.NewEnd(); line++ {
+				next[line] = step
+			}
+		}
+
+		if fileDiff.OldPath != "" {
+			delete(o, fileDiff.OldPath)
+		}
+
+		if fileDiff.Path != "" {
+			o[fileDiff.Path] = next
+		}
+	}
 }
 
 // shiftLine maps an unchanged old line through a diff; ok is false when
 // the diff replaces or removes it.
 func shiftLine(hunks []*Hunk, line int) (int, bool) {
 	shift := 0
-	for _, h := range hunks {
-		if h.OldCount > 0 {
-			if line >= h.OldStart && line <= h.OldEnd() {
-				return 0, false
+	for _, hunk := range hunks {
+		// A pure insertion sits after OldStart and removes nothing.
+		if hunk.OldCount == 0 {
+			if line > hunk.OldStart {
+				shift += hunk.NewCount
 			}
-			if line > h.OldEnd() {
-				shift += h.NewCount - h.OldCount
-			}
-		} else if line > h.OldStart {
-			shift += h.NewCount
+
+			continue
+		}
+
+		replaced := line >= hunk.OldStart && line <= hunk.OldEnd()
+		if replaced {
+			return 0, false
+		}
+
+		if line > hunk.OldEnd() {
+			shift += hunk.NewCount - hunk.OldCount
 		}
 	}
+
 	return line + shift, true
 }
 
 // HunkCommits lists the states that wrote a hunk's added lines, newest
 // first; empty for single-state changes and pure deletions.
-func (s *RepoState) HunkCommits(path string, h *Hunk) []string {
-	m := s.owners[path]
-	if m == nil {
+func (s *RepoState) HunkCommits(path string, hunk *Hunk) []string {
+	fileOwners := s.owners[path]
+	if fileOwners == nil {
 		return nil
 	}
-	seen := map[string]bool{}
-	for l := h.NewStart; l <= h.NewEnd(); l++ {
-		if o := m[l]; o != "" {
-			seen[o] = true
+
+	writers := map[string]bool{}
+	for line := hunk.NewStart; line <= hunk.NewEnd(); line++ {
+		if owner := fileOwners[line]; owner != "" {
+			writers[owner] = true
 		}
 	}
-	var out []string
-	if seen[review.Worktree] {
-		out = append(out, review.Worktree)
+
+	var commits []string
+	if writers[review.Worktree] {
+		commits = append(commits, review.Worktree)
 	}
-	for _, c := range s.Commits {
-		if seen[c] {
-			out = append(out, c)
+
+	for _, commit := range s.Commits {
+		if writers[commit] {
+			commits = append(commits, commit)
 		}
 	}
-	return out
+
+	return commits
 }

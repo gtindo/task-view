@@ -2,8 +2,11 @@ package engine
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/gtindo/changes-view/internal/review"
 )
 
 // File diff statuses.
@@ -13,6 +16,13 @@ const (
 	DiffDeleted  = "deleted"
 	DiffRenamed  = "renamed"
 )
+
+// binarySniffBytes is how far Git looks for a NUL byte to call a file binary.
+const binarySniffBytes = 8000
+
+// gitHeaderOverhead is the length of "a/ b/" in an unquoted `diff --git a/x b/x`
+// header, around the two paths.
+const gitHeaderOverhead = len("a/ b/")
 
 // Hunk is one zero-context hunk. Old lines use initial-state numbers, new
 // lines final-state numbers.
@@ -35,9 +45,9 @@ func (h *Hunk) PureDeletion() bool { return h.NewCount == 0 }
 type FileDiff struct {
 	Path      string // final path; empty for a deleted file
 	OldPath   string // initial path; empty for an added file
-	Status    string
+	Status    string // one of the Diff* statuses
 	Binary    bool
-	Untracked bool
+	Untracked bool // an untracked WORKTREE file, which `git diff` leaves out
 	Hunks     []*Hunk
 }
 
@@ -47,89 +57,89 @@ func (f *FileDiff) Key() string {
 	if f.Path != "" {
 		return f.Path
 	}
+
 	return f.OldPath
 }
 
-// Added and Removed count changed lines.
+// Added counts the final-state lines the file diff adds.
 func (f *FileDiff) Added() int {
-	n := 0
-	for _, h := range f.Hunks {
-		n += h.NewCount
+	added := 0
+	for _, hunk := range f.Hunks {
+		added += hunk.NewCount
 	}
-	return n
+
+	return added
 }
 
+// Removed counts the initial-state lines the file diff removes.
 func (f *FileDiff) Removed() int {
-	n := 0
-	for _, h := range f.Hunks {
-		n += h.OldCount
+	removed := 0
+	for _, hunk := range f.Hunks {
+		removed += hunk.OldCount
 	}
-	return n
+
+	return removed
 }
 
 // ChangeState is the node change state matching this file diff.
 func (f *FileDiff) ChangeState() string {
 	switch f.Status {
 	case DiffAdded:
-		return "added"
+		return review.ChangeAdded
 	case DiffDeleted:
-		return "deleted"
+		return review.ChangeDeleted
 	}
-	return "modified"
+
+	return review.ChangeModified
 }
 
-var hunkRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
 // ParseDiff parses `git diff --unified=0 -M` output.
 func ParseDiff(out string) []*FileDiff {
 	var files []*FileDiff
-	var cur *FileDiff
+	var file *FileDiff
 	var hunk *Hunk
 	inHeader := false
 
 	for _, line := range strings.Split(out, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
-			a, b := splitGitHeader(strings.TrimPrefix(line, "diff --git "))
-			cur = &FileDiff{Path: b, OldPath: a, Status: DiffModified}
-			files = append(files, cur)
+			oldPath, newPath := splitGitHeader(strings.TrimPrefix(line, "diff --git "))
+			file = &FileDiff{Path: newPath, OldPath: oldPath, Status: DiffModified}
+			files = append(files, file)
 			hunk = nil
 			inHeader = true
-		case cur == nil:
+		case file == nil:
 			continue
 		case inHeader && strings.HasPrefix(line, "new file mode"):
-			cur.Status = DiffAdded
-			cur.OldPath = ""
+			file.Status = DiffAdded
+			file.OldPath = ""
 		case inHeader && strings.HasPrefix(line, "deleted file mode"):
-			cur.Status = DiffDeleted
-			cur.Path = ""
+			file.Status = DiffDeleted
+			file.Path = ""
 		case inHeader && strings.HasPrefix(line, "rename from "):
-			cur.OldPath = unquote(strings.TrimPrefix(line, "rename from "))
-			cur.Status = DiffRenamed
+			file.OldPath = unquote(strings.TrimPrefix(line, "rename from "))
+			file.Status = DiffRenamed
 		case inHeader && strings.HasPrefix(line, "rename to "):
-			cur.Path = unquote(strings.TrimPrefix(line, "rename to "))
-			cur.Status = DiffRenamed
+			file.Path = unquote(strings.TrimPrefix(line, "rename to "))
+			file.Status = DiffRenamed
 		case inHeader && strings.HasPrefix(line, "Binary files "):
-			cur.Binary = true
+			file.Binary = true
 		case inHeader && strings.HasPrefix(line, "--- "):
-			if p := diffPath(strings.TrimPrefix(line, "--- ")); p != "" {
-				cur.OldPath = p
+			if oldPath := diffPath(strings.TrimPrefix(line, "--- ")); oldPath != "" {
+				file.OldPath = oldPath
 			}
 		case inHeader && strings.HasPrefix(line, "+++ "):
-			if p := diffPath(strings.TrimPrefix(line, "+++ ")); p != "" {
-				cur.Path = p
+			if newPath := diffPath(strings.TrimPrefix(line, "+++ ")); newPath != "" {
+				file.Path = newPath
 			}
 		case strings.HasPrefix(line, "@@ "):
 			inHeader = false
-			m := hunkRe.FindStringSubmatch(line)
-			if m == nil {
-				continue
+			if parsed := parseHunkHeader(line); parsed != nil {
+				hunk = parsed
+				file.Hunks = append(file.Hunks, hunk)
 			}
-			hunk = &Hunk{
-				OldStart: atoi(m[1]), OldCount: atoiDefault(m[2], 1),
-				NewStart: atoi(m[3]), NewCount: atoiDefault(m[4], 1),
-			}
-			cur.Hunks = append(cur.Hunks, hunk)
 		case hunk != nil && strings.HasPrefix(line, "-"):
 			hunk.Old = append(hunk.Old, trimCR(line[1:]))
 		case hunk != nil && strings.HasPrefix(line, "+"):
@@ -138,85 +148,118 @@ func ParseDiff(out string) []*FileDiff {
 	}
 
 	// A pure mode change has no hunks and is not part of the change.
-	var kept []*FileDiff
-	for _, f := range files {
-		if f.Status == DiffModified && len(f.Hunks) == 0 && !f.Binary {
-			continue
-		}
-		if f.Status == DiffRenamed && len(f.Hunks) == 0 && !f.Binary && f.Path == f.OldPath {
-			continue
-		}
-		kept = append(kept, f)
-	}
-	return kept
+	return slices.DeleteFunc(files, func(file *FileDiff) bool {
+		metadataOnly := len(file.Hunks) == 0 && !file.Binary
+		modeChange := file.Status == DiffModified
+		samePathRename := file.Status == DiffRenamed && file.Path == file.OldPath
+
+		return metadataOnly && (modeChange || samePathRename)
+	})
 }
 
-func diffPath(s string) string {
-	s = strings.TrimRight(s, "\t")
-	if s == "/dev/null" {
+// parseHunkHeader reads an `@@ -a,b +c,d @@` line; nil when it does not
+// match. A missing count means one line.
+func parseHunkHeader(line string) *Hunk {
+	match := hunkHeader.FindStringSubmatch(line)
+	if match == nil {
+		return nil
+	}
+
+	return &Hunk{
+		OldStart: atoi(match[1]),
+		OldCount: atoiDefault(match[2], 1),
+		NewStart: atoi(match[3]),
+		NewCount: atoiDefault(match[4], 1),
+	}
+}
+
+// diffPath reads the path of a `---` or `+++` line; empty for /dev/null.
+func diffPath(field string) string {
+	field = strings.TrimRight(field, "\t")
+	if field == "/dev/null" {
 		return ""
 	}
-	s = unquote(s)
-	if strings.HasPrefix(s, "a/") || strings.HasPrefix(s, "b/") {
-		return s[2:]
+
+	field = unquote(field)
+	if strings.HasPrefix(field, "a/") || strings.HasPrefix(field, "b/") {
+		return field[2:]
 	}
-	return s
+
+	return field
 }
 
 // splitGitHeader splits the "a/x b/y" part of a `diff --git` line.
 func splitGitHeader(rest string) (string, string) {
 	if strings.HasPrefix(rest, `"`) {
-		a, tail := readQuoted(rest)
-		b := strings.TrimSpace(tail)
-		return strings.TrimPrefix(unquote(a), "a/"), strings.TrimPrefix(unquote(b), "b/")
+		oldPath, tail := readQuoted(rest)
+		newPath := strings.TrimSpace(tail)
+
+		return strings.TrimPrefix(unquote(oldPath), "a/"), strings.TrimPrefix(unquote(newPath), "b/")
 	}
-	if (len(rest)-5)%2 == 0 && len(rest) > 5 {
-		l := (len(rest) - 5) / 2
-		a, b := rest[2:2+l], rest[2+l+3:]
-		if a == b {
-			return a, b
+
+	// Paths may contain " b/", so first try the split where both halves are
+	// the same path, which holds for everything but renames.
+	pathsLen := len(rest) - gitHeaderOverhead
+	if pathsLen > 0 && pathsLen%2 == 0 {
+		pathLen := pathsLen / 2
+		oldPath, newPath := rest[2:2+pathLen], rest[2+pathLen+3:]
+		if oldPath == newPath {
+			return oldPath, newPath
 		}
 	}
-	if i := strings.Index(rest, " b/"); i >= 0 {
-		return strings.TrimPrefix(rest[:i], "a/"), unquote(rest[i+3:])
+
+	if sep := strings.Index(rest, " b/"); sep >= 0 {
+		return strings.TrimPrefix(rest[:sep], "a/"), unquote(rest[sep+3:])
 	}
+
 	return rest, rest
 }
 
-func readQuoted(s string) (string, string) {
-	for i := 1; i < len(s); i++ {
-		if s[i] == '\\' {
+// readQuoted splits a leading C-quoted string off text, honouring escapes.
+func readQuoted(text string) (string, string) {
+	for i := 1; i < len(text); i++ {
+		if text[i] == '\\' {
 			i++
+
 			continue
 		}
-		if s[i] == '"' {
-			return s[:i+1], s[i+1:]
+
+		if text[i] == '"' {
+			return text[:i+1], text[i+1:]
 		}
 	}
-	return s, ""
+
+	return text, ""
 }
 
-func unquote(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		if u, err := strconv.Unquote(s); err == nil {
-			return u
-		}
+// unquote decodes a path Git C-quoted because of special characters.
+func unquote(text string) string {
+	isQuoted := len(text) >= 2 && text[0] == '"' && text[len(text)-1] == '"'
+	if !isQuoted {
+		return text
 	}
-	return s
-}
 
-func trimCR(s string) string { return strings.TrimSuffix(s, "\r") }
-
-func atoi(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
-func atoiDefault(s string, def int) int {
-	if s == "" {
-		return def
+	if unquoted, err := strconv.Unquote(text); err == nil {
+		return unquoted
 	}
-	return atoi(s)
+
+	return text
+}
+
+func trimCR(line string) string { return strings.TrimSuffix(line, "\r") }
+
+func atoi(digits string) int {
+	value, _ := strconv.Atoi(digits)
+
+	return value
+}
+
+func atoiDefault(digits string, fallback int) int {
+	if digits == "" {
+		return fallback
+	}
+
+	return atoi(digits)
 }
 
 // SplitLines splits file content into lines; CRLF and LF both end a line,
@@ -225,22 +268,16 @@ func SplitLines(data []byte) []string {
 	if len(data) == 0 {
 		return nil
 	}
-	s := string(data)
-	s = strings.TrimSuffix(s, "\n")
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = strings.TrimSuffix(l, "\r")
+
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = trimCR(line)
 	}
+
 	return lines
 }
 
 // IsBinary applies Git's heuristic: a NUL byte in the first 8000 bytes.
 func IsBinary(data []byte) bool {
-	n := min(len(data), 8000)
-	for i := 0; i < n; i++ {
-		if data[i] == 0 {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(data[:min(len(data), binarySniffBytes)], 0)
 }

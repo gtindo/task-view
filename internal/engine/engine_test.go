@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/gtindo/changes-view/internal/fixture"
 	"github.com/gtindo/changes-view/internal/langs"
+	"github.com/gtindo/changes-view/internal/review"
 )
 
 func TestParseDiff(t *testing.T) {
@@ -52,24 +54,30 @@ new mode 100755
 	if len(files) != 5 {
 		t.Fatalf("got %d files, want 5 (mode-only change dropped)", len(files))
 	}
-	a := files[0]
-	if a.Path != "src/a.ts" || len(a.Hunks) != 3 || a.Added() != 3 || a.Removed() != 3 {
-		t.Errorf("a.ts parsed wrong: %+v", a)
+
+	modified := files[0]
+	if modified.Path != "src/a.ts" || len(modified.Hunks) != 3 || modified.Added() != 3 || modified.Removed() != 3 {
+		t.Errorf("a.ts parsed wrong: %+v", modified)
 	}
-	if h := a.Hunks[2]; !h.PureDeletion() || h.OldStart != 12 || h.OldCount != 2 || h.Old[0] != "-- removed line that starts with dashes" {
-		t.Errorf("pure deletion parsed wrong: %+v", h)
+
+	if deletion := modified.Hunks[2]; !deletion.PureDeletion() || deletion.OldStart != 12 || deletion.OldCount != 2 || deletion.Old[0] != "-- removed line that starts with dashes" {
+		t.Errorf("pure deletion parsed wrong: %+v", deletion)
 	}
-	if r := files[1]; r.Status != DiffRenamed || r.OldPath != "old name.ts" || r.Path != "new name.ts" {
-		t.Errorf("rename parsed wrong: %+v", r)
+
+	if renamed := files[1]; renamed.Status != DiffRenamed || renamed.OldPath != "old name.ts" || renamed.Path != "new name.ts" {
+		t.Errorf("rename parsed wrong: %+v", renamed)
 	}
-	if u := files[2]; u.Status != DiffAdded || u.Path != "café.ts" {
-		t.Errorf("quoted path parsed wrong: %+v", u)
+
+	if quoted := files[2]; quoted.Status != DiffAdded || quoted.Path != "café.ts" {
+		t.Errorf("quoted path parsed wrong: %+v", quoted)
 	}
-	if b := files[3]; !b.Binary || b.Path != "img.png" {
-		t.Errorf("binary parsed wrong: %+v", b)
+
+	if binary := files[3]; !binary.Binary || binary.Path != "img.png" {
+		t.Errorf("binary parsed wrong: %+v", binary)
 	}
-	if d := files[4]; d.Status != DiffDeleted || d.Key() != "gone.ts" || d.Removed() != 2 {
-		t.Errorf("deletion parsed wrong: %+v", d)
+
+	if deleted := files[4]; deleted.Status != DiffDeleted || deleted.Key() != "gone.ts" || deleted.Removed() != 2 {
+		t.Errorf("deletion parsed wrong: %+v", deleted)
 	}
 }
 
@@ -78,6 +86,7 @@ func TestSplitLines(t *testing.T) {
 	if len(got) != 3 || got[0] != "a" || got[2] != "c" {
 		t.Errorf("got %q", got)
 	}
+
 	if len(SplitLines([]byte("a\nb"))) != 2 || SplitLines(nil) != nil {
 		t.Error("final line without break")
 	}
@@ -97,33 +106,42 @@ func TestGlobs(t *testing.T) {
 		{"Makefile", "Makefile", true},
 		{"docs/**", "docs/a/b.md", true},
 	}
-	for _, c := range cases {
-		if got := langs.MatchGlob(c.pattern, c.path); got != c.want {
-			t.Errorf("MatchGlob(%q, %q) = %v", c.pattern, c.path, got)
+	for _, testCase := range cases {
+		if got := langs.MatchGlob(testCase.pattern, testCase.path); got != testCase.want {
+			t.Errorf("MatchGlob(%q, %q) = %v", testCase.pattern, testCase.path, got)
 		}
 	}
 }
 
 func TestWorktreeChanged(t *testing.T) {
-	s := fixture.Build(t)
-	data, _ := json.Marshal(s.Review())
-	path := filepath.Join(s.Web, ".review", "change.json")
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, data, 0o644)
+	set := fixture.Build(t)
+	data, err := json.Marshal(set.Review())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(set.Web, ".review", "change.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	beforeWorktreeCheck = func() {
-		os.WriteFile(filepath.Join(s.Web, "src", "a.ts"), []byte("changed while checking, longer content\n"), 0o644)
+		edited := []byte("changed while checking, longer content\n")
+		if err := os.WriteFile(filepath.Join(set.Web, "src", "a.ts"), edited, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	defer func() { beforeWorktreeCheck = nil }()
 
-	e := Run(path, Options{})
-	found := false
-	for _, f := range e.Findings {
-		if f.Code == "worktree_changed" && f.File == "src/a.ts" {
-			found = true
-		}
-	}
+	run := Run(path, Options{})
+	found := slices.ContainsFunc(run.Findings, func(finding review.Finding) bool {
+		return finding.Code == "worktree_changed" && finding.File == "src/a.ts"
+	})
 	if !found {
-		t.Fatalf("no worktree_changed finding: %+v", e.Findings)
+		t.Fatalf("no worktree_changed finding: %+v", run.Findings)
 	}
 }

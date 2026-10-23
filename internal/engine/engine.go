@@ -4,13 +4,21 @@ package engine
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/gtindo/changes-view/internal/gitx"
 	"github.com/gtindo/changes-view/internal/review"
+)
+
+// Coverage statuses of a hunk or a file.
+const (
+	coverageCovered   = "covered"
+	coveragePartial   = "partial"
+	coverageUncovered = "uncovered"
 )
 
 // beforeWorktreeCheck lets tests change files during a run.
@@ -25,8 +33,10 @@ type Options struct {
 
 // HunkCoverage says which nodes cover one hunk of the diff.
 type HunkCoverage struct {
-	Hunk      *Hunk
-	Nodes     []string // node ids whose file or range covers part of the hunk
+	// Hunk is the covered hunk.
+	Hunk  *Hunk
+	Nodes []string // node ids whose file or range covers part of the hunk
+	// TestNodes are the test nodes among Nodes.
 	TestNodes []string
 	Uncovered [][2]int // uncovered runs; final-state numbers, or initial-state for pure deletions
 	OldSide   bool     // Uncovered uses initial-state numbers
@@ -35,472 +45,632 @@ type HunkCoverage struct {
 
 // FileCoverage is the coverage of one changed file.
 type FileCoverage struct {
-	Diff      *FileDiff
+	// Diff is the file's diff.
+	Diff *FileDiff
+	// Hunks covers each hunk of Diff, in order.
 	Hunks     []*HunkCoverage
 	FileNodes []string // nodes with a `file` ref on it
-	Coverage  string
-	HasTests  bool
+	// Coverage rolls up the hunks: covered, partial or uncovered.
+	Coverage string
+	// HasTests is true when a test node points into the file.
+	HasTests bool
 }
 
 // ClaimResult is the outcome of one claim's evidence.
 type ClaimResult struct {
-	Status   string
+	// Status is the worst status of the evidence, or agent without any.
+	Status string
+	// Evidence holds one result per evidence ref, in order.
 	Evidence []*RefResult
 }
 
 // UnlistedRepo is a sibling repo with uncommitted changes.
 type UnlistedRepo struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Changes int    `json:"changes"`
+	// Name is the repo folder's name.
+	Name string `json:"name"`
+	// Path is the repo's absolute path.
+	Path string `json:"path"`
+	// Changes counts its uncommitted paths.
+	Changes int `json:"changes"`
 }
 
 // Summary counts statuses across nodes, edges and claim evidence.
 type Summary struct {
-	Verified        int `json:"verified"`
-	Contradicted    int `json:"contradicted"`
-	Unresolved      int `json:"unresolved"`
+	// Verified counts refs the engine verified.
+	Verified int `json:"verified"`
+	// Contradicted counts refs the repo contradicts.
+	Contradicted int `json:"contradicted"`
+	// Unresolved counts refs that could not be checked.
+	Unresolved int `json:"unresolved"`
+	// AgentStatements counts what rests on the agent's word: statements
+	// without a ref, node `why` texts and node metadata entries.
 	AgentStatements int `json:"agentStatements"`
 }
 
 // Engine holds one run over a review file.
 type Engine struct {
+	// ReviewPath is the review file's absolute path, empty when unknown.
 	ReviewPath string
-	Base       string
-	Review     *review.Review
-	Repos      []*RepoState
-	Findings   []review.Finding
-	ExitCode   int
+	// Base is the Git root holding the review file, which relative repo
+	// paths resolve from; the review file's folder outside Git.
+	Base string
+	// Review is the loaded review file, nil when it failed to load.
+	Review *review.Review
+	// Repos are the listed repos, in review order.
+	Repos []*RepoState
+	// Findings are all findings, in the order they were raised.
+	Findings []review.Finding
+	// ExitCode is the process exit code the findings call for.
+	ExitCode int
 
+	// NodeResults, EdgeResults and ClaimResults line up with the review's
+	// nodes, edges and claims.
 	NodeResults  []*RefResult
 	EdgeResults  []*RefResult
 	ClaimResults []*ClaimResult
 	Coverage     map[string][]*FileCoverage // by repo id
-	Unlisted     []UnlistedRepo
-	Uncommitted  map[string][]string
-	Summary      Summary
+	// Unlisted are sibling repos with uncommitted changes.
+	Unlisted []UnlistedRepo
+	// Uncommitted lists, by repo id, uncommitted paths outside the review.
+	Uncommitted map[string][]string
+	// Summary counts the statuses of the run.
+	Summary Summary
 
-	repoByID    map[string]*RepoState
-	nodeByID    map[string]*review.Node
-	uncommitted map[string][]string
-	opts        Options
+	repoByID map[string]*RepoState
 }
 
 // Repo returns the state of a listed repo.
 func (e *Engine) Repo(id string) *RepoState { return e.repoByID[id] }
 
 // Run checks a review file end to end.
-func Run(path string, opts Options) *Engine {
-	e := &Engine{repoByID: map[string]*RepoState{}, nodeByID: map[string]*review.Node{},
-		uncommitted: map[string][]string{}, Coverage: map[string][]*FileCoverage{}, opts: opts}
-	abs, err := filepath.Abs(path)
-	if err == nil {
-		e.ReviewPath = abs
+func Run(path string, options Options) *Engine {
+	run := &Engine{
+		repoByID: map[string]*RepoState{},
+		Coverage: map[string][]*FileCoverage{},
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		run.ReviewPath = abs
 	}
 
-	r, fs := review.Load(path)
-	e.Findings = append(e.Findings, fs...)
-	if r == nil {
-		return e.finish()
+	reviewFile, loadFindings := review.Load(path)
+	run.Findings = append(run.Findings, loadFindings...)
+	if reviewFile == nil {
+		return run.finish()
 	}
-	e.Review = r
-	for _, n := range r.Nodes {
-		e.nodeByID[n.ID] = n
-	}
+
+	run.Review = reviewFile
 
 	if !gitx.Available() {
-		e.Findings = append(e.Findings, review.NewFinding("git_not_found", "", "no `git` executable on PATH",
+		run.Findings = append(run.Findings, review.NewFinding("git_not_found", "", "no `git` executable on PATH",
 			"install Git or add it to PATH"))
-		return e.finish()
+
+		return run.finish()
 	}
 
-	dir := filepath.Dir(e.ReviewPath)
-	if top, err := gitx.Toplevel(dir); err == nil {
-		e.Base = top
-	} else {
-		e.Base = dir
+	run.Base = filepath.Dir(run.ReviewPath)
+	if gitRoot, err := gitx.Toplevel(run.Base); err == nil {
+		run.Base = gitRoot
 	}
 
-	if env := e.resolveRepos(); len(env) > 0 {
-		e.Findings = append(e.Findings, env...)
-		return e.finish()
+	if envFindings := run.resolveRepos(); len(envFindings) > 0 {
+		run.Findings = append(run.Findings, envFindings...)
+
+		return run.finish()
 	}
 
-	for _, s := range e.Repos {
-		e.Findings = append(e.Findings, e.checkChain(s)...)
-		if s.OK {
-			if err := e.loadDiff(s); err != nil {
-				s.OK = false
-				f := review.NewFinding("commit_chain_broken", fmt.Sprintf("/repos/%d/commits", s.Index),
-					fmt.Sprintf("cannot diff repo %q: %v", s.Repo.ID, err), "check that the listed commits exist")
-				f.Repo = s.Repo.ID
-				e.Findings = append(e.Findings, f)
-			} else if !s.Repo.IsContext() {
-				e.attribute(s)
-			}
-		}
-	}
-	e.Uncommitted = e.uncommitted
-
-	for i, n := range r.Nodes {
-		if n.Ref == nil {
-			e.NodeResults = append(e.NodeResults, &RefResult{Status: review.StatusAgent})
-			continue
-		}
-		e.NodeResults = append(e.NodeResults, e.checkRef(n.Ref, fmt.Sprintf("/nodes/%d/ref", i), n))
-	}
-	for i, ed := range r.Edges {
-		if ed.Ref == nil {
-			e.EdgeResults = append(e.EdgeResults, &RefResult{Status: review.StatusAgent})
-			continue
-		}
-		e.EdgeResults = append(e.EdgeResults, e.checkRef(ed.Ref, fmt.Sprintf("/edges/%d/ref", i), nil))
-	}
-	for i, c := range r.Claims {
-		cr := &ClaimResult{Status: review.StatusAgent}
-		for j, ev := range c.Evidence {
-			res := e.checkRef(ev, fmt.Sprintf("/claims/%d/evidence/%d", i, j), nil)
-			cr.Evidence = append(cr.Evidence, res)
-		}
-		cr.Status = worst(cr.Evidence)
-		e.ClaimResults = append(e.ClaimResults, cr)
+	run.Uncommitted = map[string][]string{}
+	for _, repoState := range run.Repos {
+		run.loadRepo(repoState)
 	}
 
-	e.computeCoverage()
-	e.checkLanguages()
+	run.checkRefs()
+	run.computeCoverage()
+	run.checkLanguages()
 	if beforeWorktreeCheck != nil {
 		beforeWorktreeCheck()
 	}
-	e.checkWorktreeChanged()
-	if opts.ScanSiblings {
-		e.scanSiblings()
+
+	run.checkWorktreeChanged()
+	if options.ScanSiblings {
+		run.scanSiblings()
 	}
-	return e.finish()
+
+	return run.finish()
 }
 
 func (e *Engine) finish() *Engine {
 	e.ExitCode = review.ExitCode(e.Findings)
 	e.Summary = e.summarize()
+
 	return e
 }
 
-func worst(results []*RefResult) string {
+// loadRepo checks a repo's commit chain, then loads its diff and, for a
+// changed repo, which state wrote each added line.
+func (e *Engine) loadRepo(repoState *RepoState) {
+	e.Findings = append(e.Findings, e.checkChain(repoState)...)
+	if !repoState.OK {
+		return
+	}
+
+	if err := repoState.loadDiff(); err != nil {
+		repoState.OK = false
+		e.Findings = append(e.Findings, repoState.finding("commit_chain_broken", repoState.commitsPath(),
+			fmt.Sprintf("cannot diff repo %q: %v", repoState.Repo.ID, err), "check that the listed commits exist"))
+
+		return
+	}
+
+	if !repoState.Repo.IsContext() {
+		repoState.attribute()
+	}
+}
+
+// checkRefs checks the refs of every node, edge and claim. Statements
+// without a ref rest on the agent's word.
+func (e *Engine) checkRefs() {
+	for i, node := range e.Review.Nodes {
+		e.NodeResults = append(e.NodeResults, e.checkOptionalRef(node.Ref, fmt.Sprintf("/nodes/%d/ref", i), node))
+	}
+
+	for i, edge := range e.Review.Edges {
+		e.EdgeResults = append(e.EdgeResults, e.checkOptionalRef(edge.Ref, fmt.Sprintf("/edges/%d/ref", i), nil))
+	}
+
+	for i, claim := range e.Review.Claims {
+		claimResult := &ClaimResult{}
+		for j, evidence := range claim.Evidence {
+			claimResult.Evidence = append(claimResult.Evidence, e.checkRef(evidence, fmt.Sprintf("/claims/%d/evidence/%d", i, j), nil))
+		}
+
+		claimResult.Status = worstStatus(claimResult.Evidence)
+		e.ClaimResults = append(e.ClaimResults, claimResult)
+	}
+}
+
+func (e *Engine) checkOptionalRef(ref *review.Ref, path string, node *review.Node) *RefResult {
+	if ref == nil {
+		return &RefResult{Status: review.StatusAgent}
+	}
+
+	return e.checkRef(ref, path, node)
+}
+
+// worstStatus rolls up evidence: unresolved beats contradicted beats
+// verified, and no evidence leaves the agent's word.
+func worstStatus(results []*RefResult) string {
 	if len(results) == 0 {
 		return review.StatusAgent
 	}
+
 	status := review.StatusVerified
-	for _, r := range results {
-		switch r.Status {
+	for _, result := range results {
+		switch result.Status {
 		case review.StatusUnresolved:
-			status = review.StatusUnresolved
+			return review.StatusUnresolved
 		case review.StatusContradicted:
-			if status != review.StatusUnresolved {
-				status = review.StatusContradicted
-			}
+			status = review.StatusContradicted
 		}
 	}
+
 	return status
 }
 
 func (e *Engine) summarize() Summary {
-	var s Summary
+	var summary Summary
 	count := func(status string) {
 		switch status {
 		case review.StatusVerified:
-			s.Verified++
+			summary.Verified++
 		case review.StatusContradicted:
-			s.Contradicted++
+			summary.Contradicted++
 		case review.StatusUnresolved:
-			s.Unresolved++
+			summary.Unresolved++
 		default:
-			s.AgentStatements++
+			summary.AgentStatements++
 		}
 	}
-	for _, r := range e.NodeResults {
-		count(r.Status)
+
+	for _, result := range e.NodeResults {
+		count(result.Status)
 	}
-	for _, r := range e.EdgeResults {
-		count(r.Status)
+
+	for _, result := range e.EdgeResults {
+		count(result.Status)
 	}
-	for _, c := range e.ClaimResults {
-		if len(c.Evidence) == 0 {
+
+	for _, claimResult := range e.ClaimResults {
+		if len(claimResult.Evidence) == 0 {
 			count(review.StatusAgent)
 		}
-		for _, r := range c.Evidence {
-			count(r.Status)
+
+		for _, result := range claimResult.Evidence {
+			count(result.Status)
 		}
 	}
-	if e.Review != nil {
-		for _, n := range e.Review.Nodes {
-			if n.Why != "" {
-				s.AgentStatements++
-			}
-			s.AgentStatements += len(n.Meta)
-		}
+
+	if e.Review == nil {
+		return summary
 	}
-	return s
+
+	for _, node := range e.Review.Nodes {
+		if node.Why != "" {
+			summary.AgentStatements++
+		}
+
+		summary.AgentStatements += len(node.Meta)
+	}
+
+	return summary
 }
 
-type interval struct {
-	s, e int
-	node string
-	test bool
+// fileKey identifies one file of one repo.
+type fileKey struct{ repo, file string }
+
+// span is the lines one node's `file` or `range` ref claims in a file.
+type span struct {
+	start, end int
+	node       string
+	test       bool
+}
+
+func (s span) contains(line int) bool { return line >= s.start && line <= s.end }
+
+// fileSpans are the node spans that point into one file, by how they
+// cover it.
+type fileSpans struct {
+	whole    []span // `file` refs: the whole file
+	final    []span // ranges in final-state numbers
+	initial  []span // ranges of deleted nodes, in initial-state numbers
+	hasTests bool   // a test node points into the file
+}
+
+func (f fileSpans) wholeFileTested() bool {
+	return slices.ContainsFunc(f.whole, func(whole span) bool { return whole.test })
 }
 
 // computeCoverage maps every hunk of every changed repo onto the nodes
 // whose `file` or `range` refs cover it, and raises unmentioned_hunk and
 // unreferenced_test_hunk warnings.
 func (e *Engine) computeCoverage() {
-	type fileKey struct{ repo, file string }
-	newSide := map[fileKey][]interval{}
-	oldSide := map[fileKey][]interval{}
-	whole := map[fileKey][]interval{}
-	testFiles := map[fileKey]bool{}
+	spans := indexSpans(e.Review.Nodes, e.repoByID)
+	for _, repoState := range e.Repos {
+		if !repoState.hasDiff() {
+			continue
+		}
 
-	for _, n := range e.Review.Nodes {
-		ref := n.Ref
-		if ref == nil || ref.At != "" || ref.File == "" {
+		repoID := repoState.Repo.ID
+		var files []*FileCoverage
+		for _, fileDiff := range repoState.Files {
+			fileCoverage, findings := coverFile(repoID, fileDiff, spans[fileKey{repoID, fileDiff.Key()}])
+			e.Findings = append(e.Findings, findings...)
+			files = append(files, fileCoverage)
+		}
+
+		e.Coverage[repoID] = files
+	}
+}
+
+// indexSpans groups the spans of node refs by the file they cover. Refs
+// pinned with `at` read an older state and cover nothing in the diff.
+func indexSpans(nodes []*review.Node, repoByID map[string]*RepoState) map[fileKey]fileSpans {
+	spans := map[fileKey]fileSpans{}
+	for _, node := range nodes {
+		ref := node.Ref
+		coversDiff := ref != nil && ref.At == "" && ref.File != ""
+		if !coversDiff {
 			continue
 		}
-		s := e.repoByID[ref.Repo]
-		if s == nil || !s.OK || s.Repo.IsContext() {
+
+		repoState := repoByID[ref.Repo]
+		if repoState == nil || !repoState.hasDiff() {
 			continue
 		}
-		k := fileKey{ref.Repo, ref.File}
-		iv := interval{node: n.ID, test: n.IsTest()}
-		if n.IsTest() {
-			testFiles[k] = true
-		}
+
+		key := fileKey{ref.Repo, ref.File}
+		into := spans[key]
+		nodeSpan := span{node: node.ID, test: node.IsTest()}
+		into.hasTests = into.hasTests || node.IsTest()
 		switch ref.Type {
 		case review.RefFile:
-			whole[k] = append(whole[k], iv)
+			into.whole = append(into.whole, nodeSpan)
 		case review.RefRange, review.RefHunk:
-			iv.s, iv.e = ref.Lines[0], ref.Lines[1]
-			if n.Change == review.ChangeDeleted {
-				oldSide[k] = append(oldSide[k], iv)
+			nodeSpan.start, nodeSpan.end = ref.Lines[0], ref.Lines[1]
+			if node.Change == review.ChangeDeleted {
+				into.initial = append(into.initial, nodeSpan)
 			} else {
-				newSide[k] = append(newSide[k], iv)
+				into.final = append(into.final, nodeSpan)
 			}
+		}
+
+		spans[key] = into
+	}
+
+	return spans
+}
+
+// coverFile computes one changed file's coverage and the findings for its
+// uncovered and untested lines.
+func coverFile(repoID string, fileDiff *FileDiff, spans fileSpans) (*FileCoverage, []review.Finding) {
+	fileCoverage := &FileCoverage{Diff: fileDiff, HasTests: spans.hasTests}
+	for _, whole := range spans.whole {
+		fileCoverage.FileNodes = appendUnique(fileCoverage.FileNodes, whole.node)
+	}
+
+	// Binary files and pure renames have no hunks: only a `file` ref covers them.
+	if len(fileDiff.Hunks) == 0 {
+		if len(fileCoverage.FileNodes) > 0 {
+			fileCoverage.Coverage = coverageCovered
+
+			return fileCoverage, nil
+		}
+
+		fileCoverage.Coverage = coverageUncovered
+		what := "binary file changed"
+		if !fileDiff.Binary {
+			what = fmt.Sprintf("file renamed from %s", fileDiff.OldPath)
+		}
+
+		finding := review.NewFinding("unmentioned_hunk", "", what+", not covered by any node",
+			"add a node with a `file` ref on it, or explain in notes")
+		finding.Repo, finding.File = repoID, fileDiff.Key()
+
+		return fileCoverage, []review.Finding{finding}
+	}
+
+	var findings []review.Finding
+	for _, hunk := range fileDiff.Hunks {
+		hunkCoverage, untested := coverHunk(hunk, spans)
+		fileCoverage.Hunks = append(fileCoverage.Hunks, hunkCoverage)
+		findings = append(findings, unmentionedFindings(repoID, fileDiff.Key(), hunkCoverage)...)
+		if spans.hasTests {
+			findings = append(findings, untestedFindings(repoID, fileDiff.Key(), untested)...)
 		}
 	}
 
-	for _, s := range e.Repos {
-		if !s.OK || s.Repo.IsContext() {
+	fileCoverage.Coverage = rollUpCoverage(fileCoverage.Hunks)
+
+	return fileCoverage, findings
+}
+
+// coverHunk finds the nodes covering a hunk. It also returns the hunk's
+// changed lines that no test node covers.
+func coverHunk(hunk *Hunk, spans fileSpans) (*HunkCoverage, []int) {
+	hunkCoverage := &HunkCoverage{Hunk: hunk}
+	for _, whole := range spans.whole {
+		hunkCoverage.addNode(whole)
+	}
+
+	var uncovered, untested []int
+	changedCount := hunk.NewCount
+	if hunk.PureDeletion() {
+		changedCount = hunk.OldCount
+		uncovered, untested = hunkCoverage.coverRemoval(spans)
+	} else {
+		uncovered, untested = hunkCoverage.coverAddition(spans)
+	}
+
+	hunkCoverage.Uncovered = runs(uncovered)
+	hunkCoverage.Coverage = hunkStatus(len(uncovered), changedCount)
+
+	return hunkCoverage, untested
+}
+
+func (h *HunkCoverage) addNode(nodeSpan span) {
+	h.Nodes = appendUnique(h.Nodes, nodeSpan.node)
+	if nodeSpan.test {
+		h.TestNodes = appendUnique(h.TestNodes, nodeSpan.node)
+	}
+}
+
+// coverRemoval covers a pure deletion, line by line in initial-state
+// numbers. A final-state range touching the removal point covers all of
+// it; an initial-state range covers the removed lines it spans.
+func (h *HunkCoverage) coverRemoval(spans fileSpans) ([]int, []int) {
+	hunk := h.Hunk
+	h.OldSide = true
+	covered := len(spans.whole) > 0
+	tested := spans.wholeFileTested()
+	for _, finalSpan := range spans.final {
+		if !touchesDeletion(hunk, finalSpan.start, finalSpan.end) {
 			continue
 		}
-		var files []*FileCoverage
-		for _, fd := range s.Files {
-			k := fileKey{s.Repo.ID, fd.Key()}
-			fc := &FileCoverage{Diff: fd, HasTests: testFiles[k]}
-			for _, iv := range whole[k] {
-				fc.FileNodes = appendUnique(fc.FileNodes, iv.node)
-			}
-			wholeTest := false
-			for _, iv := range whole[k] {
-				if iv.test {
-					wholeTest = true
-				}
-			}
 
-			if len(fd.Hunks) == 0 {
-				fc.Coverage = "covered"
-				if len(fc.FileNodes) == 0 {
-					fc.Coverage = "uncovered"
-					what := "binary file changed"
-					if !fd.Binary {
-						what = fmt.Sprintf("file renamed from %s", fd.OldPath)
-					}
-					f := review.NewFinding("unmentioned_hunk", "", what+", not covered by any node",
-						"add a node with a `file` ref on it, or explain in notes")
-					f.Repo, f.File = s.Repo.ID, fd.Key()
-					e.Findings = append(e.Findings, f)
-				}
-				files = append(files, fc)
+		h.addNode(finalSpan)
+		covered = true
+		tested = tested || finalSpan.test
+	}
+
+	var uncovered, untested []int
+	for line := hunk.OldStart; line <= hunk.OldEnd(); line++ {
+		lineCovered := covered
+		for _, initialSpan := range spans.initial {
+			if initialSpan.contains(line) {
+				h.addNode(initialSpan)
+				lineCovered = true
+			}
+		}
+
+		if !lineCovered {
+			uncovered = append(uncovered, line)
+		}
+
+		if !tested {
+			untested = append(untested, line)
+		}
+	}
+
+	return uncovered, untested
+}
+
+// coverAddition covers a hunk that adds lines, line by line in final-state
+// numbers. Deleted nodes over the lines it replaces count as covering it
+// too, without making any line covered.
+func (h *HunkCoverage) coverAddition(spans fileSpans) ([]int, []int) {
+	hunk := h.Hunk
+	wholeCovered := len(spans.whole) > 0
+	wholeTested := spans.wholeFileTested()
+
+	var uncovered, untested []int
+	for line := hunk.NewStart; line <= hunk.NewEnd(); line++ {
+		lineCovered, lineTested := wholeCovered, wholeTested
+		for _, finalSpan := range spans.final {
+			if !finalSpan.contains(line) {
 				continue
 			}
 
-			for _, h := range fd.Hunks {
-				hc := &HunkCoverage{Hunk: h}
-				var uncovered, untestedLines []int
-				mark := func(iv interval) {
-					hc.Nodes = appendUnique(hc.Nodes, iv.node)
-					if iv.test {
-						hc.TestNodes = appendUnique(hc.TestNodes, iv.node)
-					}
-				}
-				for _, iv := range whole[k] {
-					mark(iv)
-				}
-				if h.PureDeletion() {
-					hc.OldSide = true
-					covered := len(whole[k]) > 0
-					testCovered := wholeTest
-					for _, iv := range newSide[k] {
-						if iv.s <= h.NewStart+1 && iv.e >= h.NewStart {
-							mark(iv)
-							covered = true
-							testCovered = testCovered || iv.test
-						}
-					}
-					for l := h.OldStart; l <= h.OldEnd(); l++ {
-						lc := covered
-						for _, iv := range oldSide[k] {
-							if l >= iv.s && l <= iv.e {
-								mark(iv)
-								lc = true
-							}
-						}
-						if !lc {
-							uncovered = append(uncovered, l)
-						}
-						if !testCovered {
-							untestedLines = append(untestedLines, l)
-						}
-					}
-				} else {
-					for l := h.NewStart; l <= h.NewEnd(); l++ {
-						lc := len(whole[k]) > 0
-						tc := wholeTest
-						for _, iv := range newSide[k] {
-							if l >= iv.s && l <= iv.e {
-								mark(iv)
-								lc = true
-								tc = tc || iv.test
-							}
-						}
-						if !lc {
-							uncovered = append(uncovered, l)
-						}
-						if !tc {
-							untestedLines = append(untestedLines, l)
-						}
-					}
-					for _, iv := range oldSide[k] {
-						if overlap(h.OldStart, h.OldEnd(), iv.s, iv.e) > 0 {
-							mark(iv)
-						}
-					}
-				}
-
-				hc.Uncovered = runs(uncovered)
-				total := h.NewCount
-				if h.PureDeletion() {
-					total = h.OldCount
-				}
-				switch {
-				case len(uncovered) == 0:
-					hc.Coverage = "covered"
-				case len(uncovered) == total:
-					hc.Coverage = "uncovered"
-				default:
-					hc.Coverage = "partial"
-				}
-				fc.Hunks = append(fc.Hunks, hc)
-
-				for _, r := range hc.Uncovered {
-					msg := "changed lines not covered by any node"
-					hint := fmt.Sprintf("add a node with a range covering %s, or explain in notes", linesText(r))
-					if hc.OldSide {
-						msg = fmt.Sprintf("removed lines (initial state %s) not covered by any node", rangeText(r))
-						hint = fmt.Sprintf("cover the removal with a range around line %d, or a deleted node on initial lines %s", h.NewStart, rangeText(r))
-					}
-					f := review.NewFinding("unmentioned_hunk", "", msg, hint)
-					f.Repo, f.File, f.Lines = s.Repo.ID, fd.Key(), []int{r[0], r[1]}
-					e.Findings = append(e.Findings, f)
-				}
-				if testFiles[k] {
-					for _, r := range runs(untestedLines) {
-						f := review.NewFinding("unreferenced_test_hunk", "",
-							"changed lines in a test file outside every test node",
-							fmt.Sprintf("add a test node covering %s, or widen an existing test node's range", linesText(r)))
-						f.Repo, f.File, f.Lines = s.Repo.ID, fd.Key(), []int{r[0], r[1]}
-						e.Findings = append(e.Findings, f)
-					}
-				}
-			}
-			fc.Coverage = fileCoverage(fc.Hunks)
-			files = append(files, fc)
+			h.addNode(finalSpan)
+			lineCovered = true
+			lineTested = lineTested || finalSpan.test
 		}
-		e.Coverage[s.Repo.ID] = files
+
+		if !lineCovered {
+			uncovered = append(uncovered, line)
+		}
+
+		if !lineTested {
+			untested = append(untested, line)
+		}
 	}
+
+	for _, initialSpan := range spans.initial {
+		if overlap(hunk.OldStart, hunk.OldEnd(), initialSpan.start, initialSpan.end) > 0 {
+			h.addNode(initialSpan)
+		}
+	}
+
+	return uncovered, untested
 }
 
-func fileCoverage(hunks []*HunkCoverage) string {
-	cov, unc := 0, 0
-	for _, h := range hunks {
-		switch h.Coverage {
-		case "covered":
-			cov++
-		case "uncovered":
-			unc++
+func hunkStatus(uncoveredCount, changedCount int) string {
+	switch uncoveredCount {
+	case 0:
+		return coverageCovered
+	case changedCount:
+		return coverageUncovered
+	}
+
+	return coveragePartial
+}
+
+// rollUpCoverage is a file's status: covered or uncovered when all its
+// hunks are, else partial.
+func rollUpCoverage(hunks []*HunkCoverage) string {
+	covered, uncovered := 0, 0
+	for _, hunkCoverage := range hunks {
+		switch hunkCoverage.Coverage {
+		case coverageCovered:
+			covered++
+		case coverageUncovered:
+			uncovered++
 		}
 	}
+
 	switch {
-	case cov == len(hunks):
-		return "covered"
-	case unc == len(hunks):
-		return "uncovered"
+	case covered == len(hunks):
+		return coverageCovered
+	case uncovered == len(hunks):
+		return coverageUncovered
 	}
-	return "partial"
+
+	return coveragePartial
 }
 
-func linesText(r [2]int) string {
-	if r[0] == r[1] {
-		return fmt.Sprintf("line %d", r[0])
-	}
-	return fmt.Sprintf("lines %d-%d", r[0], r[1])
-}
-
-func rangeText(r [2]int) string {
-	if r[0] == r[1] {
-		return fmt.Sprint(r[0])
-	}
-	return fmt.Sprintf("%d-%d", r[0], r[1])
-}
-
-func (e *Engine) nodeStatus(id string) string {
-	for i, n := range e.Review.Nodes {
-		if n.ID == id && i < len(e.NodeResults) {
-			return e.NodeResults[i].Status
+// unmentionedFindings reports each run of a hunk that no node covers.
+func unmentionedFindings(repoID, file string, hunkCoverage *HunkCoverage) []review.Finding {
+	var findings []review.Finding
+	for _, run := range hunkCoverage.Uncovered {
+		msg := "changed lines not covered by any node"
+		hint := fmt.Sprintf("add a node with a range covering %s, or explain in notes", linesText(run))
+		if hunkCoverage.OldSide {
+			msg = fmt.Sprintf("removed lines (initial state %s) not covered by any node", rangeText(run))
+			hint = fmt.Sprintf("cover the removal with a range around line %d, or a deleted node on initial lines %s",
+				hunkCoverage.Hunk.NewStart, rangeText(run))
 		}
+
+		findings = append(findings, linesFinding("unmentioned_hunk", msg, hint, repoID, file, run))
 	}
-	return ""
+
+	return findings
+}
+
+// untestedFindings reports each run of changed lines in a test file that
+// no test node covers.
+func untestedFindings(repoID, file string, untested []int) []review.Finding {
+	var findings []review.Finding
+	for _, run := range runs(untested) {
+		findings = append(findings, linesFinding("unreferenced_test_hunk",
+			"changed lines in a test file outside every test node",
+			fmt.Sprintf("add a test node covering %s, or widen an existing test node's range", linesText(run)),
+			repoID, file, run))
+	}
+
+	return findings
+}
+
+func linesFinding(code, msg, hint, repoID, file string, run [2]int) review.Finding {
+	finding := review.NewFinding(code, "", msg, hint)
+	finding.Repo, finding.File, finding.Lines = repoID, file, []int{run[0], run[1]}
+
+	return finding
+}
+
+func linesText(run [2]int) string {
+	if run[0] == run[1] {
+		return fmt.Sprintf("line %d", run[0])
+	}
+
+	return fmt.Sprintf("lines %d-%d", run[0], run[1])
+}
+
+func rangeText(run [2]int) string {
+	if run[0] == run[1] {
+		return fmt.Sprint(run[0])
+	}
+
+	return fmt.Sprintf("%d-%d", run[0], run[1])
 }
 
 // checkLanguages warns once per referenced file that matches no language.
 func (e *Engine) checkLanguages() {
-	seen := map[string]bool{}
+	seen := map[fileKey]bool{}
 	for _, site := range e.Review.AllRefs() {
 		ref := site.Ref
 		if ref.File == "" {
 			continue
 		}
-		s := e.repoByID[ref.Repo]
-		if s == nil {
+
+		repoState := e.repoByID[ref.Repo]
+		if repoState == nil {
 			continue
 		}
-		key := ref.Repo + "\x00" + ref.File
-		if seen[key] || s.Language(ref.File, ref.Language) != "" {
+
+		key := fileKey{ref.Repo, ref.File}
+		if seen[key] || repoState.Language(ref.File, ref.Language) != "" {
 			continue
 		}
+
 		seen[key] = true
-		f := review.NewFinding("no_language", site.Path, fmt.Sprintf("%s matches no language; it is shown as plain text", ref.File),
+		finding := review.NewFinding("no_language", site.Path, fmt.Sprintf("%s matches no language; it is shown as plain text", ref.File),
 			fmt.Sprintf("add a glob for it to repo %q's `languages`, or set `language` on the ref", ref.Repo))
-		f.Repo, f.File = ref.Repo, ref.File
-		e.Findings = append(e.Findings, f)
+		finding.Repo, finding.File = ref.Repo, ref.File
+		e.Findings = append(e.Findings, finding)
 	}
 }
 
+// checkWorktreeChanged warns about worktree files edited while the run read
+// them, since the results may mix two versions.
 func (e *Engine) checkWorktreeChanged() {
-	for _, s := range e.Repos {
-		if !s.Worktree {
+	for _, repoState := range e.Repos {
+		if !repoState.Worktree {
 			continue
 		}
-		for _, p := range s.changedWorktreeFiles() {
-			f := review.NewFinding("worktree_changed", "", fmt.Sprintf("%s changed on disk while it was being checked", p),
+
+		for _, file := range repoState.changedWorktreeFiles() {
+			finding := review.NewFinding("worktree_changed", "", fmt.Sprintf("%s changed on disk while it was being checked", file),
 				"wait until edits are finished, then validate again")
-			f.Repo, f.File = s.Repo.ID, p
-			e.Findings = append(e.Findings, f)
+			finding.Repo, finding.File = repoState.Repo.ID, file
+			e.Findings = append(e.Findings, finding)
 		}
 	}
 }
@@ -510,51 +680,58 @@ func (e *Engine) checkWorktreeChanged() {
 func (e *Engine) scanSiblings() {
 	listed := map[string]bool{}
 	parents := map[string]bool{}
-	for _, s := range e.Repos {
-		p, _ := filepath.EvalSymlinks(s.Abs)
-		listed[filepath.Clean(p)] = true
-		parents[filepath.Dir(filepath.Clean(p))] = true
+	for _, repoState := range e.Repos {
+		resolved, _ := filepath.EvalSymlinks(repoState.Abs)
+		listed[filepath.Clean(resolved)] = true
+		parents[filepath.Dir(filepath.Clean(resolved))] = true
 	}
-	var dirs []string
-	for p := range parents {
-		dirs = append(dirs, p)
-	}
-	sort.Strings(dirs)
-	for _, parent := range dirs {
+
+	for _, parent := range slices.Sorted(maps.Keys(parents)) {
 		entries, err := os.ReadDir(parent)
 		if err != nil {
 			continue
 		}
-		for _, en := range entries {
-			if !en.IsDir() || strings.HasPrefix(en.Name(), ".") {
+
+		for _, entry := range entries {
+			name := entry.Name()
+			dir := filepath.Join(parent, name)
+			candidate := entry.IsDir() && !strings.HasPrefix(name, ".") && !listed[dir]
+			if !candidate {
 				continue
 			}
-			dir := filepath.Join(parent, en.Name())
-			if listed[dir] {
+
+			changes := uncommittedCount(dir)
+			if changes == 0 {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
-				continue
-			}
-			status, err := gitx.Repo{Dir: dir}.Status()
-			if err != nil || len(status) == 0 {
-				continue
-			}
-			e.Unlisted = append(e.Unlisted, UnlistedRepo{Name: en.Name(), Path: dir, Changes: len(status)})
-			f := review.NewFinding("unlisted_repo", "",
-				fmt.Sprintf("sibling repo %s has %d uncommitted %s and is not in repos", en.Name(), len(status), plural(len(status), "change", "changes")),
-				"if the change touched it, list it in `repos` with \"WORKTREE\"; otherwise ignore")
-			f.Repo = en.Name()
-			e.Findings = append(e.Findings, f)
+
+			e.Unlisted = append(e.Unlisted, UnlistedRepo{Name: name, Path: dir, Changes: changes})
+			e.Findings = append(e.Findings, repoFinding(name, "unlisted_repo", "",
+				fmt.Sprintf("sibling repo %s has %d uncommitted %s and is not in repos", name, changes, plural(changes, "change", "changes")),
+				"if the change touched it, list it in `repos` with \"WORKTREE\"; otherwise ignore"))
 		}
 	}
 }
 
-func appendUnique(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
-			return list
-		}
+// uncommittedCount counts uncommitted paths in dir; 0 when dir is not a Git
+// repo or Git cannot read it.
+func uncommittedCount(dir string) int {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return 0
 	}
-	return append(list, v)
+
+	status, err := gitx.Repo{Dir: dir}.Status()
+	if err != nil {
+		return 0
+	}
+
+	return len(status)
+}
+
+func appendUnique(list []string, value string) []string {
+	if slices.Contains(list, value) {
+		return list
+	}
+
+	return append(list, value)
 }
