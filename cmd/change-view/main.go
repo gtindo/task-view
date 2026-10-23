@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gtindo/changes-view/internal/engine"
@@ -22,6 +24,11 @@ import (
 
 // version is set at release time with -ldflags.
 var version = "0.1.0-dev"
+
+// exitUsage is the conventional exit code for a bad invocation. It equals
+// review.ExitSchema, so scripts treat a bad invocation like an unusable
+// review file.
+const exitUsage = 2
 
 const usage = `change-view — review views for a coding agent's change
 
@@ -40,86 +47,127 @@ Exit codes (validate, open):
   3  environment error (repo missing, not a Git repo, git not found)
 `
 
+const (
+	validateUsage = "usage: change-view validate <file> [--format text|json] [--scan-siblings]\n"
+	openUsage     = "usage: change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]\n"
+
+	scanSiblingsHelp = "also warn about dirty Git repos next to the listed repos"
+	// --no-sibling-scan predates the opt-in --scan-siblings; it is still
+	// accepted so existing scripts and agent instructions keep working.
+	noSiblingScanHelp = "ignored: siblings are only scanned with --scan-siblings"
+)
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2
+		emit(stderr, "%s", usage)
+
+		return exitUsage
 	}
-	cmd, rest := args[0], args[1:]
-	switch cmd {
+
+	command, rest := args[0], args[1:]
+	switch command {
 	case "validate":
 		return cmdValidate(rest, stdout, stderr)
 	case "open":
 		return cmdOpen(rest, stdout, stderr)
 	case "schema":
-		stdout.Write(review.SchemaJSON)
-		return 0
+		emit(stdout, "%s", review.SchemaJSON)
+
+		return review.ExitOK
 	case "languages":
-		for _, l := range langs.All() {
-			names := append([]string{l.Name}, l.Aliases...)
-			line := strings.Join(names, ", ")
-			if len(l.Extensions) > 0 {
-				line += "\t" + strings.Join(l.Extensions, " ")
-			}
-			fmt.Fprintln(stdout, line)
-		}
-		return 0
+		writeLanguages(stdout)
+
+		return review.ExitOK
 	case "instructions":
-		fmt.Fprint(stdout, instructions.Text)
-		return 0
+		emit(stdout, "%s", instructions.Text)
+
+		return review.ExitOK
 	case "version", "--version", "-v":
-		fmt.Fprintf(stdout, "change-view %s\nschema versions: %s\n", version, joinInts(review.SupportedVersions))
-		return 0
+		emit(stdout, "change-view %s\nschema versions: %s\n", version, joinInts(review.SupportedVersions))
+
+		return review.ExitOK
 	case "help", "--help", "-h":
-		fmt.Fprint(stdout, usage)
-		return 0
+		emit(stdout, "%s", usage)
+
+		return review.ExitOK
 	}
-	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
-	return 2
+
+	emit(stderr, "unknown command %q\n\n%s", command, usage)
+
+	return exitUsage
 }
 
-// parse splits positional args from flags so flags may follow the file.
-func parse(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
+// emit writes CLI output. A failed write to stdout or stderr has nowhere left
+// to be reported, and the exit code already carries the result, so the error
+// is deliberately dropped in this one place.
+func emit(out io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(out, format, args...)
+}
+
+// writeLanguages lists each language's names, then its file extensions.
+func writeLanguages(stdout io.Writer) {
+	for _, language := range langs.All() {
+		line := strings.Join(slices.Concat([]string{language.Name}, language.Aliases), ", ")
+		if len(language.Extensions) > 0 {
+			line += "\t" + strings.Join(language.Extensions, " ")
+		}
+
+		emit(stdout, "%s\n", line)
+	}
+}
+
+// parseArgs splits positional args from flags so flags may follow the file:
+// the flag package stops at the first positional arg, so parsing resumes
+// after each one.
+func parseArgs(flags *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
 	for len(args) > 0 {
-		if err := fs.Parse(args); err != nil {
+		if err := flags.Parse(args); err != nil {
 			return nil, err
 		}
-		args = fs.Args()
+
+		args = flags.Args()
 		if len(args) > 0 {
-			pos = append(pos, args[0])
+			positional = append(positional, args[0])
 			args = args[1:]
 		}
 	}
-	return pos, nil
+
+	return positional, nil
 }
 
 func cmdValidate(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	format := fs.String("format", "text", "output format: text or json")
-	scanSiblings := fs.Bool("scan-siblings", false, "also warn about dirty Git repos next to the listed repos")
-	fs.Bool("no-sibling-scan", false, "ignored: siblings are only scanned with --scan-siblings")
-	pos, err := parse(fs, args)
-	if err != nil || len(pos) != 1 {
-		fmt.Fprint(stderr, "usage: change-view validate <file> [--format text|json] [--scan-siblings]\n")
-		return 2
+	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	format := flags.String("format", "text", "output format: text or json")
+	scanSiblings := flags.Bool("scan-siblings", false, scanSiblingsHelp)
+	flags.Bool("no-sibling-scan", false, noSiblingScanHelp)
+
+	positional, err := parseArgs(flags, args)
+	if err != nil || len(positional) != 1 {
+		emit(stderr, "%s", validateUsage)
+
+		return exitUsage
 	}
-	e := engine.Run(pos[0], engine.Options{ScanSiblings: *scanSiblings})
+
+	reviewPath := positional[0]
+	result := engine.Run(reviewPath, engine.Options{ScanSiblings: *scanSiblings})
 	switch *format {
 	case "json":
-		writeJSON(stdout, e)
+		writeJSON(stdout, result)
 	case "text":
-		writeText(stdout, pos[0], e)
+		emit(stdout, "%s", textReport(reviewPath, result))
 	default:
-		fmt.Fprintf(stderr, "unknown format %q\n", *format)
-		return 2
+		emit(stderr, "unknown format %q\n", *format)
+
+		return exitUsage
 	}
-	return e.ExitCode
+
+	return result.ExitCode
 }
 
 type validateOutput struct {
@@ -131,138 +179,203 @@ type validateOutput struct {
 	Summary       engine.Summary   `json:"summary"`
 }
 
-func writeJSON(w io.Writer, e *engine.Engine) {
-	errs, warns := review.Split(e.Findings)
-	out := validateOutput{Valid: e.ExitCode == 0, ExitCode: e.ExitCode, SchemaVersion: review.SchemaVersion,
-		Errors: errs, Warnings: warns, Summary: e.Summary}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.SetEscapeHTML(false)
-	enc.Encode(out)
+func writeJSON(out io.Writer, result *engine.Engine) {
+	errs, warnings := review.Split(result.Findings)
+	output := validateOutput{
+		Valid:         result.ExitCode == review.ExitOK,
+		ExitCode:      result.ExitCode,
+		SchemaVersion: review.SchemaVersion,
+		Errors:        errs,
+		Warnings:      warnings,
+		Summary:       result.Summary,
+	}
+
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	// Agents read hints and messages verbatim; keep <, > and & unescaped.
+	encoder.SetEscapeHTML(false)
+	// Like emit: a failed write to stdout has nowhere left to be reported.
+	_ = encoder.Encode(output)
 }
 
-func writeText(w io.Writer, path string, e *engine.Engine) {
-	errs, warns := review.Split(e.Findings)
+// textReport renders the human-readable validation report for the review
+// file at reviewPath: a status line, the summary counts, then the errors and
+// warnings.
+func textReport(reviewPath string, result *engine.Engine) string {
+	errs, warnings := review.Split(result.Findings)
 	mark := "✓"
-	if e.ExitCode != 0 {
+	if result.ExitCode != review.ExitOK {
 		mark = "✗"
 	}
-	fmt.Fprintf(w, "%s %s — exit %d: %d %s, %d %s\n", mark, path, e.ExitCode,
-		len(errs), pl(len(errs), "error", "errors"), len(warns), pl(len(warns), "warning", "warnings"))
-	s := e.Summary
-	fmt.Fprintf(w, "  verified %d · contradicted %d · unresolved %d · agent statements %d\n",
-		s.Verified, s.Contradicted, s.Unresolved, s.AgentStatements)
-	section := func(title string, list []review.Finding) {
-		if len(list) == 0 {
+
+	var report strings.Builder
+	fmt.Fprintf(&report, "%s %s — exit %d: %d %s, %d %s\n", mark, reviewPath, result.ExitCode,
+		len(errs), plural(len(errs), "error", "errors"),
+		len(warnings), plural(len(warnings), "warning", "warnings"))
+
+	summary := result.Summary
+	fmt.Fprintf(&report, "  verified %d · contradicted %d · unresolved %d · agent statements %d\n",
+		summary.Verified, summary.Contradicted, summary.Unresolved, summary.AgentStatements)
+
+	section := func(title string, findings []review.Finding) {
+		if len(findings) == 0 {
 			return
 		}
-		fmt.Fprintf(w, "\n%s\n", title)
-		for _, f := range list {
-			loc := []string{}
-			if f.Path != "" {
-				loc = append(loc, f.Path)
-			}
-			where := f.Repo
-			if f.File != "" {
-				where += " " + f.File
-				if len(f.Lines) == 2 {
-					if f.Lines[0] == f.Lines[1] {
-						where += fmt.Sprintf(":%d", f.Lines[0])
-					} else {
-						where += fmt.Sprintf(":%d-%d", f.Lines[0], f.Lines[1])
-					}
-				}
-			}
-			if strings.TrimSpace(where) != "" {
-				loc = append(loc, strings.TrimSpace(where))
-			}
-			fmt.Fprintf(w, "  %-22s %s\n", f.Code, strings.Join(loc, "  "))
-			fmt.Fprintf(w, "    %s\n", f.Message)
-			if f.Hint != "" {
-				fmt.Fprintf(w, "    hint: %s\n", f.Hint)
+
+		fmt.Fprintf(&report, "\n%s\n", title)
+		for _, finding := range findings {
+			fmt.Fprintf(&report, "  %-22s %s\n", finding.Code, findingLocation(finding))
+			fmt.Fprintf(&report, "    %s\n", finding.Message)
+			if finding.Hint != "" {
+				fmt.Fprintf(&report, "    hint: %s\n", finding.Hint)
 			}
 		}
 	}
 	section("errors", errs)
-	section("warnings", warns)
+	section("warnings", warnings)
+
+	return report.String()
+}
+
+// findingLocation says where a finding points: its path in the review file,
+// then the repo, file and line range, each part omitted when empty.
+func findingLocation(finding review.Finding) string {
+	var parts []string
+	if finding.Path != "" {
+		parts = append(parts, finding.Path)
+	}
+
+	where := finding.Repo
+	if finding.File != "" {
+		where += " " + fileLocation(finding.File, finding.Lines)
+	}
+
+	if where = strings.TrimSpace(where); where != "" {
+		parts = append(parts, where)
+	}
+
+	return strings.Join(parts, "  ")
+}
+
+// fileLocation appends a line range to file as :line or :first-last; lines
+// that do not hold a [first, last] pair are left out.
+func fileLocation(file string, lines []int) string {
+	isLineRange := len(lines) == 2
+	if !isLineRange {
+		return file
+	}
+
+	first, last := lines[0], lines[1]
+	if first == last {
+		return fmt.Sprintf("%s:%d", file, first)
+	}
+
+	return fmt.Sprintf("%s:%d-%d", file, first, last)
 }
 
 func cmdOpen(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("open", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	out := fs.String("out", "", "where to write the HTML file (default: a temp folder)")
-	noBrowser := fs.Bool("no-browser", false, "write the page without opening it")
-	scanSiblings := fs.Bool("scan-siblings", false, "also warn about dirty Git repos next to the listed repos")
-	fs.Bool("no-sibling-scan", false, "ignored: siblings are only scanned with --scan-siblings")
-	pos, err := parse(fs, args)
-	if err != nil || len(pos) != 1 {
-		fmt.Fprint(stderr, "usage: change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]\n")
-		return 2
+	flags := flag.NewFlagSet("open", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	outPath := flags.String("out", "", "where to write the HTML file (default: a temp folder)")
+	noBrowser := flags.Bool("no-browser", false, "write the page without opening it")
+	scanSiblings := flags.Bool("scan-siblings", false, scanSiblingsHelp)
+	flags.Bool("no-sibling-scan", false, noSiblingScanHelp)
+
+	positional, err := parseArgs(flags, args)
+	if err != nil || len(positional) != 1 {
+		emit(stderr, "%s", openUsage)
+
+		return exitUsage
 	}
 
-	e := engine.Run(pos[0], engine.Options{ScanSiblings: *scanSiblings})
-	if e.ExitCode >= review.ExitSchema {
-		writeText(stderr, pos[0], e)
-		fmt.Fprintln(stderr, "\nno page generated: fix the errors above, then run open again")
-		return e.ExitCode
+	reviewPath := positional[0]
+	result := engine.Run(reviewPath, engine.Options{ScanSiblings: *scanSiblings})
+	// A page built from a review that fails the schema or the environment
+	// checks would mislead the reader, so open refuses to write one.
+	if result.ExitCode >= review.ExitSchema {
+		emit(stderr, "%s", textReport(reviewPath, result))
+		emit(stderr, "\nno page generated: fix the errors above, then run open again\n")
+
+		return result.ExitCode
 	}
 
-	page, err := render.HTML(e, version)
+	page, err := render.HTML(result, version)
 	if err != nil {
-		fmt.Fprintf(stderr, "cannot render page: %v\n", err)
-		return 3
+		emit(stderr, "cannot render page: %v\n", err)
+
+		return review.ExitEnv
 	}
-	target := *out
+
+	target := *outPath
 	if target == "" {
 		dir, err := os.MkdirTemp("", "change-view-")
 		if err != nil {
-			fmt.Fprintf(stderr, "cannot create temp folder: %v\n", err)
-			return 3
+			emit(stderr, "cannot create temp folder: %v\n", err)
+
+			return review.ExitEnv
 		}
+
 		target = filepath.Join(dir, "review.html")
 	}
+
 	if err := os.WriteFile(target, page, 0o644); err != nil {
-		fmt.Fprintf(stderr, "cannot write %s: %v\n", target, err)
-		return 3
+		emit(stderr, "cannot write %s: %v\n", target, err)
+
+		return review.ExitEnv
 	}
-	abs, _ := filepath.Abs(target)
-	if e.ExitCode != 0 {
-		writeText(stderr, pos[0], e)
-		fmt.Fprintln(stderr)
+
+	// Abs fails only when the working directory is gone; the page is already
+	// written by then, so the message falls back to an empty path instead
+	// of failing the command.
+	absTarget, _ := filepath.Abs(target)
+
+	// Contradicted or unresolved references still get a page, but the
+	// reader should see why the exit code is not zero.
+	if result.ExitCode != review.ExitOK {
+		emit(stderr, "%s\n", textReport(reviewPath, result))
 	}
-	fmt.Fprintf(stdout, "wrote %s\n", abs)
-	if !*noBrowser {
-		if err := openBrowser(abs); err != nil {
-			fmt.Fprintf(stderr, "cannot open browser: %v\n", err)
-		}
+
+	emit(stdout, "wrote %s\n", absTarget)
+	if *noBrowser {
+		return result.ExitCode
 	}
-	return e.ExitCode
+
+	if err := openBrowser(absTarget); err != nil {
+		emit(stderr, "cannot open browser: %v\n", err)
+	}
+
+	return result.ExitCode
 }
 
+// openBrowser opens path with the platform's default handler without
+// waiting for it, so the command returns while the browser starts.
 func openBrowser(path string) error {
-	var cmd *exec.Cmd
+	var opener *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", path)
+		opener = exec.Command("open", path)
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+		opener = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
 	default:
-		cmd = exec.Command("xdg-open", path)
+		opener = exec.Command("xdg-open", path)
 	}
-	return cmd.Start()
+
+	return opener.Start()
 }
 
-func pl(n int, one, many string) string {
-	if n == 1 {
+func plural(count int, one, many string) string {
+	if count == 1 {
 		return one
 	}
+
 	return many
 }
 
-func joinInts(v []int) string {
-	s := make([]string, len(v))
-	for i, n := range v {
-		s[i] = fmt.Sprint(n)
+func joinInts(numbers []int) string {
+	texts := make([]string, 0, len(numbers))
+	for _, number := range numbers {
+		texts = append(texts, strconv.Itoa(number))
 	}
-	return strings.Join(s, ", ")
+
+	return strings.Join(texts, ", ")
 }
