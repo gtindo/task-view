@@ -1,6 +1,6 @@
 # task-view — spec
 
-Oct 23, 2026 · @Yvan
+Oct 23, 2026 · @Yvan · synced with the implementation Oct 24, 2026
 
 ## Idea and principles
 
@@ -60,11 +60,14 @@ The visualizer ships as one static Go binary, `task-view`, with no runtime depen
 | `task-view schema` | Prints the JSON Schema of the review file | Agent, editors |
 | `task-view languages` | Prints valid language names, one per line, with their usual file extensions | Agent |
 | `task-view instructions` | Prints the agent context file matching this binary's schema version | Developer, to install or refresh the context file |
-| `task-view version` | Binary version and supported schema versions | Both |
+| `task-view version` | Binary version and supported schema versions (also `--version`, `-v`) | Both |
+| `task-view help` | Usage and exit codes (also `--help`, `-h`) | Both |
 
 The review file path may be absolute or relative to the current directory. Repo paths inside it are resolved as described in the schema rules.
 
-Only the listed repos are read. `--scan-siblings` opts in to the unlisted-repo check, which also looks at the folders next to them (see diff-level checks).
+Only the listed repos are read. `--scan-siblings` opts in to the unlisted-repo check, which also looks at the folders next to them (see diff-level checks). The older `--no-sibling-scan` flag is still accepted and ignored. Flags may come before or after the file.
+
+A bad invocation (no command, unknown command or format, wrong arguments) exits 2 with the usage. `open` exits 3 if it cannot write the page; with exit 1 it prints the text report to stderr, writes the page, then prints its path.
 
 ### Validate output
 
@@ -101,13 +104,13 @@ Every error and warning carries a stable `code` from the code catalog, a JSON Po
 
 ### Implementation notes
 
-- **Git access:** shell out to the `git` binary with fixed read-only subcommands: `rev-parse`, `cat-file -e`, `rev-list --first-parent`, `show <sha>:<path>`, `diff --unified=0 -M`, `status --porcelain=v1 -z`, `ls-files --others --exclude-standard -z`, `log --format`. Using the user's Git guarantees identical results to what they see, including their config for renames and attributes. Run with `GIT_OPTIONAL_LOCKS=0` so nothing is written to the repos. The working tree is read from disk only when a repo's final state is `WORKTREE`.
-- **Schema:** JSON Schema 2020-12 file embedded with `go:embed`, validated with a Go JSON Schema library (e.g. `santhosh-tekuri/jsonschema`). The schema is the single source for both `schema` output and structural validation; cross-reference rules are checked in Go after it.
-- **Syntax highlighting:** done in Go at `open` time with Chroma; its lexer list is the source for `languages` and for language validation.
+- **Git access:** shell out to the `git` binary with fixed read-only subcommands: `rev-parse` (`--show-toplevel`, `--verify`), `cat-file -e`, `rev-list --first-parent`, `show <sha>:<path>`, `diff --unified=0 -M --no-color --no-ext-diff`, `status --porcelain=v1 -z`, `ls-files --others --exclude-standard -z`, `log --no-walk=unsorted --format`. Only the `gitx` package runs them. Using the user's Git guarantees identical results to what they see, including their config for renames and attributes. Run with `GIT_OPTIONAL_LOCKS=0` so nothing is written to the repos, `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`. The working tree is read from disk only when a repo's final state is `WORKTREE`.
+- **Schema:** JSON Schema 2020-12 file embedded with `go:embed`, validated with `santhosh-tekuri/jsonschema`. The schema is the single source for both `schema` output and structural validation; cross-reference rules are checked in Go after it.
+- **Syntax highlighting:** done in Go at `open` time with Chroma; its lexer list (names and aliases) is the source for `languages` and for language validation.
 - **HTML:** a page template plus Cytoscape.js with the ELK layout extension, embedded with `go:embed` and inlined into the output file; resolved data (excerpts, hunks, statuses) is injected as one JSON blob. No network access at view time.
-- **Context file:** embedded too, so `instructions` always matches the binary's schema version.
-- **Distribution:** cross-compiled release binaries for macOS, Linux and Windows (amd64, arm64) via GoReleaser; install with Homebrew, `go install`, or a download.
-- **Tests:** golden tests on fixture repos built by a script (commits, a worktree change, a rename, a deleted file, a binary file), one fixture per error code.
+- **Context file:** embedded too, so `instructions` always matches the binary's schema version. `make docs` writes a copy to `docs/TASK_REVIEW.md`.
+- **Distribution:** `make release` cross-compiles static binaries (`CGO_ENABLED=0`) for Linux amd64/arm64, Windows amd64 and macOS amd64/arm64, with `SHA256SUMS`, the guides, the agent skill and the licenses. A GitHub Actions workflow runs it on a pushed `v*` tag and publishes a GitHub release (a tag with a suffix such as `-rc.1` is a pre-release). Install with `scripts/install.sh` or `scripts/install.ps1` (latest release, checksum check, per-user folder, no admin rights), a manual download, or `go install`.
+- **Tests:** fixture repos built by Go test helpers (`internal/fixture`) with pinned dates and config so SHAs are stable: three repos side by side (commits, a worktree change, an untracked file, a rename, a deleted file, a binary file) plus an unrelated dirty sibling. One golden output for an accurate review (`make golden` refreshes it), and a table-driven test that breaks one thing per code in the catalog and checks the code and exit code.
 
 ## Input format
 
@@ -149,13 +152,13 @@ Structural rules live in the JSON Schema; cross-reference rules are checked by t
 | `repos[].path` is absolute or relative to the root of the Git repo containing the review file; resolves to the root of a Git repo | `repo_not_found`, `not_repo_root` |
 | Every `ref.repo` names a listed repo; refs into a `context` repo are allowed but never count as changed | `unknown_repo` |
 | `edges[].from/to`, `flows[].path/tests` and `claims[].about` name existing node ids; `flows[].tests` name nodes of kind `test` | `unknown_node`, `not_a_test` |
-| `ref.file` is a repo-relative POSIX path: no leading `/`, no `..`, no backslash | `bad_path` |
+| `ref.file` is a repo-relative POSIX path: no leading `/`, no backslash, no `.`, `..` or empty segment | `bad_path` |
 | `lines` is `[start, end]`, integers, 1 ≤ start ≤ end; `line` is an integer ≥ 1 | `schema_invalid` |
 | `contains` is 1 to 200 characters, single line, matched exactly (case and whitespace as written) | `schema_invalid` |
-| `ref.at` is one of the ref's repo commits, not `WORKTREE` | `bad_at` |
+| `ref.at` is a full SHA (schema), and one of the ref's repo commits, not `WORKTREE` (checked with Git) | `schema_invalid`, `bad_at` |
 | A node with `change` other than `unchanged` has a `why` | warning `missing_why` |
 
-Text rules: files are read as UTF-8; CRLF and LF both count as one line break. A binary file (Git's own detection) can only be referenced with a `file` ref; any line-based ref on it is `binary_file`. Renamed files are referenced by their final path; the initial path is taken from `git diff -M` and shown in views. Untracked files under a `WORKTREE` state count as `added`.
+Text rules: files are read as UTF-8; CRLF and LF both count as one line break, and a final line break does not start a new line. A binary file (Git's heuristic: a NUL byte in the first 8000 bytes, or Git's diff calls it binary) can only be referenced with a `file` ref; any line-based ref on it is `binary_file`. Renamed files are referenced by their final path; the initial path is taken from `git diff -M` and shown in views. Untracked files under a `WORKTREE` state count as `added`. The review file itself and everything in its `.review/` folder are never part of the diff or of the uncommitted-changes check.
 
 Example, a change across a mock server and a client:
 
@@ -226,10 +229,11 @@ Each reference type has one deterministic check; every node, edge and claim ends
 All checks read the exact states listed in the review file: Git objects for committed states, and the working tree only when the list starts with `WORKTREE`.
 
 - **Final state** = `commits[0]`. A SHA is resolved with `git show <sha>:<file>`; `WORKTREE` is resolved by reading files from disk (tracked changes, staged or not, plus untracked files that are not ignored).
-- **Initial state** = first parent of the last entry in `commits`. For `["WORKTREE"]` alone, that is the current HEAD. Refs on `deleted` nodes are resolved there.
+- **Initial state** = first parent of the last entry in `commits`. For `["WORKTREE"]` alone, that is the current HEAD. When there is no parent (a root commit, or an unborn branch), it is the empty tree. Refs on `deleted` nodes are resolved there.
 - **Diff** = initial state to final state: `git diff <initial> <commits[0]>`, or `git diff <initial>` plus untracked files when the final state is `WORKTREE`.
-- **Intermediate states**: any ref may add `at: <sha>`, which must be one of the repo's listed commits, to point at the state after that commit (for example a claim about an approach later replaced). Rarely needed.
-- **Snapshot**: when the final state is `WORKTREE`, `open` copies every resolved file excerpt and hunk into the HTML page, so the view stays accurate if files keep changing. `validate` warns `worktree_changed` if a file referenced in the review changed between the start and end of its own run.
+- **Intermediate states**: any ref may add `at: <sha>`, which must be one of the repo's listed commits, to point at the state after that commit (for example a claim about an approach later replaced). A ref with `at` skips the change-state checks and covers no hunk of the diff. Rarely needed.
+- **Snapshot**: `open` copies every resolved file excerpt and hunk into the HTML page, so the view stays accurate if files keep changing, which matters most when the final state is `WORKTREE`. `validate` warns `worktree_changed` if a worktree file it read changed (size or modification time) between the first read and the end of its own run.
+- **Context repos** have no diff: their one commit is both the initial and the final state.
 
 Chain checks run before any reference check:
 
@@ -237,32 +241,34 @@ Chain checks run before any reference check:
 | --- | --- |
 | Every SHA exists in the repo | Error `commit_not_found` |
 | `commits[i+1]` is the first parent of `commits[i]` for every i (contiguous, newest first, no gaps); `WORKTREE`, if present, is only at index 0 and its parent is the current HEAD | Error `commit_chain_broken`, with the expected order from `git rev-list` as hint |
-| A `context` repo lists exactly one SHA | Error `context_commits` |
+| A `context` repo lists exactly one SHA, not `WORKTREE` | Error `context_commits` |
 | The repo has uncommitted changes but the list does not start with `WORKTREE` | Warning `uncommitted_changes`: not part of the review, shown as unreviewed work |
 | The list does not start with `WORKTREE` and the checked-out branch has commits after `commits[0]` | Warning `head_ahead`: later work not covered by the review |
 
-The header shows each repo's commit list with messages, and the diff map can filter hunks by commit.
+The side panel shows each repo's commit list with messages. For a change over several states, the checks replay each step's diff to record which commit (or `WORKTREE`) last wrote each added line, so the diff map can filter hunks by commit.
 
 ### Reference types
 
 | Type | Fields | Check (filesystem and Git only) |
 | --- | --- | --- |
-| `file` | `repo`, `file` | File exists in the final state (in the initial state for `deleted`). The node's `change` matches the diff for that file: added, modified, deleted, or not in the diff for `unchanged` |
-| `range` | `repo`, `file`, `lines` | File exists; `end` ≤ last line. For `modified` and `added`, at least one changed line of the diff falls in the range; for `unchanged`, none does. For `deleted`, the range is read in the initial state and must contain removed lines |
-| `site` | `repo`, `file`, `line`, `contains` | `contains` appears on `line`: verified. Not on `line` but within ±2 lines: verified with warning `site_offset` giving the actual line, for the agent to correct. Otherwise contradicted |
-| `hunk` | `repo`, `file`, `lines` | The diff has a hunk overlapping these lines (final-state line numbers; initial-state numbers for pure deletions) |
-| `commit` | `repo`, `sha` | The SHA is one of the repo's listed commits |
+| `file` | `repo`, `file` | File exists in the final state (in the initial state for `deleted`). On a node, its `change` matches the diff for that file: added, modified (renames included), deleted, or not in the diff for `unchanged` |
+| `range` | `repo`, `file`, `lines` | File exists; `end` ≤ last line. On a node: for `modified` and `added`, at least one changed line of the diff falls in the range, and a `modified` range is not in a new file; for `unchanged`, none does. For `deleted`, the range is read in the initial state and must contain removed lines. A pure deletion counts as a change at the line before it |
+| `site` | `repo`, `file`, `line`, `contains` | `contains` appears on `line`: verified. Not on `line` but within ±2 lines (nearest first): verified with warning `site_offset` giving the actual line, for the agent to correct. Otherwise contradicted, with up to three lines that do hold `contains` as hint; a `line` past the end is `range_out_of_bounds` |
+| `hunk` | `repo`, `file`, `lines` | The diff has a hunk overlapping these lines (final-state line numbers; initial-state numbers for pure deletions, or the lines around the removal point). A node marked `unchanged` cannot use one |
+| `commit` | `repo`, `sha` | The SHA (full, or a prefix of at least 7 characters) is one of the repo's listed commits |
 
-All line-based refs are read in the final state, in the state after `at` when set, and in the initial state for `deleted` nodes. Every type also accepts optional `at` and `language`.
+All line-based refs are read in the final state, in the state after `at` when set, and in the initial state for `deleted` nodes. Every type also accepts optional `at` and `language`. Change-state checks apply only to node refs without `at`; edge and claim refs are checked for existence, bounds and content. A node marked changed whose ref points into a `context` repo is `change_mismatch`, since that repo has no diff. A ref into a repo whose commits did not resolve is unresolved without a finding of its own: the chain error already explains it.
+
+When a ref fails several checks, its status is the first failure, raised to unresolved if a later one is unresolved. A claim's status is the worst status of its evidence (unresolved, then contradicted, then verified), or agent statement without evidence.
 
 Tests are nodes with `file` or `range` refs like any code, so the visualizer can confirm the test exists, was added or modified, and touches the component it claims through a `site` ref. Whether it ran or passed is only ever an agent statement in `meta`.
 
 ### Diff-level checks
 
-These run regardless of what the agent wrote and are shown at the top of every view:
+These run regardless of what the agent wrote and are listed in the side panel's findings on every view:
 
-- **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file` or `range`. Listed per file with line counts.
-- **Unlisted repos** (only with `--scan-siblings`): sibling repos (same parent folders as listed repos, one level deep) with uncommitted changes that are not in `repos[]`.
+- **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file`, `range` or `hunk` ref (without `at`). Reported per run of uncovered lines; a binary change or a pure rename has no hunks and needs a `file` ref. A pure deletion is covered by a final-state range touching the removal point or by a `deleted` node's initial-state range.
+- **Unlisted repos** (only with `--scan-siblings`): sibling repos (same parent folders as listed repos, one level deep, hidden folders skipped) with uncommitted changes that are not in `repos[]`.
 - **Changed tests:** files the agent marked as `test` nodes that changed in the diff, shown next to the code they claim to test.
 - **Changed but unreferenced test code:** hunks in files that hold test nodes but fall outside every test node's range (for example an edited assertion the agent didn't mention).
 
@@ -293,9 +299,9 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 | `context_commits` | Error, exit 1 | `context` repo does not list exactly one SHA |
 | `bad_at` | Error, exit 1 | `at` not one of the repo's listed SHAs |
 | `file_not_found` | Error, exit 1 | Referenced file absent in the state it is read in |
-| `range_out_of_bounds` | Error, exit 1 | Range ends past the last line |
+| `range_out_of_bounds` | Error, exit 1 | Range ends past the last line, or a `site` line is past it |
 | `binary_file` | Error, exit 1 | Line-based ref on a binary file |
-| `change_mismatch` | Error, exit 1 | Node's `change` contradicts the diff (marked changed with no changed lines in range, marked unchanged with changed lines, wrong added/deleted state) |
+| `change_mismatch` | Error, exit 1 | Node's `change` contradicts the diff (marked changed with no changed lines in range, marked unchanged with changed lines or on a hunk, wrong added/deleted state, changed node in a `context` repo) |
 | `site_mismatch` | Error, exit 1 | `contains` not found within ±2 lines |
 | `hunk_not_found` | Error, exit 1 | No hunk overlaps a `hunk` ref |
 | `commit_not_listed` | Error, exit 1 | `commit` ref SHA not in the repo's list |
@@ -311,38 +317,51 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 
 ## Views
 
-One static HTML page with a fixed header and four views; verification status is drawn the same way everywhere so it reads at a glance.
+One static HTML page: a top bar, a side panel, four views and an inspector. Verification status is drawn the same way everywhere so it reads at a glance.
 
-### Header
+### Top bar and side panel
 
-The agent's summary and each repo's commit list, then, only if the review file still has them, the remaining errors and warnings as counts that link to details: unmentioned hunks, unlisted repos, changed but unreferenced test code, contradicted references. Agent notes follow, unedited.
+- **Top bar:** the repo ids and review file name, count pills for verified, contradicted, unresolved and agent statements plus total errors and warnings (each opens the matching findings), the side-panel toggle and a theme switch.
+- **Error banner:** when `open` exits 1, a red banner gives the error count, says the views show the account as written, and links to the errors.
+- **Side panel** (collapsible and resizable): the agent's summary (long ones fold behind "Show more"), one card per repo with its commits from base to final state (messages, a `WORKTREE` row, file and +/− counts, uncommitted paths outside the review), the findings, the agent's notes unedited, and the generation time and binary version. Clicking a commit filters the diff map to it.
+- **Findings** are grouped: contradicted, unresolved and other errors; unmentioned changes, unreferenced test code, unlisted repos, work outside the review (`uncommitted_changes`, `head_ahead`) and other warnings; and an informational "Changed tests" group. With none, the panel says the account matches the diff. A group opens its list in the inspector, each item linking to its node, edge, claim or diff map hunk.
 
 ### Views
 
 | View | Shows | Interaction |
 | --- | --- | --- |
-| Graph | Source-code nodes and the edges between them, grouped in one box per repo, endpoints placed between repo boxes. Test nodes (kind `test`) and doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file) are hidden until their toggles are on | Click a node: its code excerpt with the changed lines highlighted, its why, its tests and what the agent says about them. The excerpt has two tabs: Diff (changed lines with the removed ones) and After (the referenced range, or the whole file for a `file` ref, as it reads in the final state). Toggle unchanged, test and doc nodes; selecting a hidden node from elsewhere turns its toggle on |
-| Flows | One lane per flow, left to right along `path`, tests attached under the nodes they cover | Click a step: same panel as graph |
-| Diff map | Every changed file, hunks colored by whether a node covers them | Click an uncovered hunk to read it |
-| Claims | Each claim with its evidence and status | Click evidence to see the resolved fact (code excerpt, hunk, commit) |
+| Graph | Source-code nodes and the edges between them, laid out with ELK. When nodes reference more than one repo, they are grouped in one box per repo (dashed for `context` repos); nodes without a ref, typically endpoints, sit outside the boxes. Test nodes (kind `test`) and doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file) and unchanged nodes are hidden until their toggles are on. Edges show their kind as a label | Click a node to open it in the inspector and dim all but its neighbours. Toggle unchanged, test and doc nodes; selecting a hidden node from elsewhere turns its toggle on. Search nodes (`/`, Enter jumps to the first hit, Esc clears), switch the direction (→ or ↓), zoom and fit, fold the legend. Large graphs open centred on the first flow's entry |
+| Flows | One lane per flow, left to right along `path`, each connector labelled and colored by the edge that joins the two steps. Tests listed in `flows[].tests` hang under the first step they have a `tests` edge to; the others are listed under the lane | Click a step, test or connector: opens it in the inspector |
+| Diff map | Every changed file with a bar of its hunks, colored by whether nodes cover them (covered, partly, not mentioned), and a coverage summary | Filter by commit, or to files that need attention or are covered; expand a file (or all) to read its hunks with their commit, the nodes covering them and the uncovered lines; open any hunk in the inspector |
+| Claims | Each claim with its status and evidence | Filter by status; expand a piece of evidence to see the resolved fact (code excerpt, hunk, commit) with the failure reason and hint |
+
+The **inspector** opens on the right (resizable; full screen on narrow viewports) for a node, edge, hunk, finding group or the changed tests. For a node it shows the location (ref type and the state read), the agent's account (`why` and `meta`), its findings, its tests, its relations, and its code. The code box has two tabs when the excerpt is in the final state and has changes: **Diff** (changed lines with the removed ones) and **After** (the referenced range, or the whole file for a `file` ref, as it reads in the final state). A `site` line marks its `contains` text. Excerpts carry three lines of context and stop at 600 rows.
+
+**Navigation:** `1`–`4` switch views, `/` searches the graph, `[` toggles the side panel, Esc closes the inspector. The URL hash (`#view=…&sel=…`) keeps the view and selection, so a link reopens the same place. Theme, panel widths, the code tab and the legend state are kept in local storage.
 
 ### Visual encoding
 
 | Status or kind | Encoding |
 | --- | --- |
 | Verified | Solid border |
-| Contradicted | Red border, reason on hover |
-| Unresolved | Amber dashed border |
+| Contradicted | Red border and ✕, reason on hover |
+| Unresolved | Amber dashed border and ? |
 | Agent statement | Dotted gray border, italic label |
-| Changed node | Filled; unchanged nodes outlined only |
-| Test node | Rounded; `meta` shown as a gray "agent says" badge (for example "agent says: passed") |
-| Edge with verified site | Solid line; without ref, dotted |
+| Changed node | Filled by change: green added, blue modified, red deleted (label struck through); unchanged nodes plain |
+| Test node | Rounded; an `observed` value in `meta` is shown as an "agent says" badge (for example "agent says: passed"), green for a pass, red for a failure |
+| Edge | Solid line with a verified site, dotted without ref, red for contradicted, dashed amber for unresolved; `tests` edges have their own arrowhead |
 
-The page is one self-contained HTML file (renderer, styles, highlighted code and data inlined), works offline, follows the system light or dark theme, and can be kept or shared as a file.
+The page is one self-contained HTML file (renderer, styles, highlighted code and data inlined; every excerpt and hunk is copied in, so it does not change when files do), works offline, follows the system light or dark theme unless the reader picks one, and can be kept or shared as a file.
 
 ## Agent context file
 
-The agent learns the format from one file, `TASK_REVIEW.md`, printed by `task-view instructions` and referenced from the project's `CLAUDE.md` or `AGENTS.md` (for example a line `@TASK_REVIEW.md` or "When you finish a task, follow TASK\_REVIEW.md"). Its full content for schema version 1:
+The agent learns the format from one file, `TASK_REVIEW.md`, printed by `task-view instructions`. There are three ways to hand it to an agent:
+
+- **Skill** (recommended): `skills/task-review/SKILL.md`, shipped with every release, tells the agent to run `task-view instructions` when it finishes a task (or is asked to describe an existing commit) and follow what it prints, so the text always matches the installed binary. It falls back to a `TASK_REVIEW.md` in the repo when `task-view` is not on `PATH`.
+- **Context file:** `task-view instructions > TASK_REVIEW.md`, referenced from the project's `CLAUDE.md` or `AGENTS.md` (for example "When you finish a task, follow TASK\_REVIEW.md"), refreshed after upgrades.
+- **One-off prompt:** ask the agent to run `task-view instructions` and write a review file, for a new task or an existing commit.
+
+Its full content for schema version 1:
 
 ```markdown
 # Task review file
@@ -439,11 +458,9 @@ Add a `site` ref pointing at the line where the relation happens:
 ~~~
 
 `contains` is a short exact substring of that line. If you can't point at a
-line, omit `ref`; never guess. Every changed non-test node on source code
-should have at least one `tests` edge from a test node, or a note saying why
-not. Nodes on documentation, data or config files (Markdown, plain text,
-JSON, YAML, TOML, INI, XML…) or binary files need neither: the tool does not
-check them for tests, so write no notes about their tests.
+line, omit `ref`; never guess. Give each test node a `tests` edge to every
+node it exercises. A node with no `tests` edge has no test; the reviewer sees
+that, so write no notes explaining it.
 
 ## Flows
 
@@ -469,15 +486,15 @@ boundary; `tests` lists the test nodes that exercise it.
   line number, then validate again.
 ```
 
-The file is embedded in the binary, versioned with the schema, and is the only documentation the agent needs; the spec sections above are for the people building the tool.
+The file is embedded in the binary (`internal/instructions`), versioned with the schema, copied to `docs/TASK_REVIEW.md` by `make docs`, and is the only documentation the agent needs; the spec sections above are for the people building the tool.
 
 ## Implementation steps
 
-Three steps, each usable on its own: step 1 lets agents produce accurate review files, step 2 gives reviewers the views, step 3 polishes.
+Three steps, each usable on its own: step 1 lets agents produce accurate review files, step 2 gives reviewers the views, step 3 polishes. Steps 1 and 2 are done; step 3 is partly done.
 
 1. **Validator binary.** Go module, embedded JSON Schema, `schema`, `languages`, `instructions`, `version`, and `validate`: schema rules, chain checks including `WORKTREE`, all reference types (`file`, `range`, `site`, `hunk`, `commit`), diff-level checks, the full code catalog, JSON and text output, exit codes. Fixture repos and golden tests per code. `TASK_REVIEW.md` embedded. Exit: an agent produces a file that validates on a real multi-repo change with uncommitted work.
-2. **`open` with views.** Embedded template, Cytoscape.js with ELK, Chroma highlighting; header, graph with repo grouping, flow lanes, diff map, claims panel, node detail panel; error banner for exit 1. Exit: a reviewer can validate a real change from the page alone.
-3. **Extras.** Side-by-side comparison of two review files, per-commit filtering in the diff map, release pipeline with GoReleaser and a Homebrew tap.
+2. **`open` with views.** Embedded template, Cytoscape.js with ELK, Chroma highlighting; top bar and side panel, graph with repo grouping, flow lanes, diff map, claims panel, inspector; error banner for exit 1. Exit: a reviewer can validate a real change from the page alone.
+3. **Extras.** Done: per-commit filtering in the diff map; a release pipeline (`make release` and a tag-triggered GitHub Actions workflow, instead of GoReleaser) with install scripts and a skill (no Homebrew tap). Not done: side-by-side comparison of two review files.
 
 ### Decisions
 
