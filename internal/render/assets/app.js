@@ -59,6 +59,7 @@
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
     copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
     arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    sidebar: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
     layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
     logo: '<path d="M6 7h8M6 12h12M6 17h6"/><circle cx="18" cy="7" r="1.6" fill="currentColor"/>',
     note: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
@@ -129,6 +130,8 @@
   }
 
   // ── State & routing ────────────────────────────────────────
+  const SB_MIN = 220, SB_MAX = 600, SB_DEFAULT = 320;
+  function clampWidth(w) { return Math.max(SB_MIN, Math.min(SB_MAX, w || SB_DEFAULT)); }
   function loadPref(k, def) { try { return localStorage.getItem(k) || def; } catch { return def; } }
   function savePref(k, v) { try { localStorage.setItem(k, v); } catch {} }
   const state = {
@@ -141,6 +144,8 @@
     claimFilter: "all",
     openFiles: new Set(),
     theme: loadPref("cv-theme", "auto"),
+    sidebar: loadPref("cv-sidebar", "1") === "1",
+    sidebarWidth: clampWidth(+loadPref("cv-sidebar-w", "320")),
     legend: loadPref("cv-legend", D.nodes.length > 20 ? "0" : "1") === "1",
   };
   const VIEWS = [
@@ -176,7 +181,7 @@
 
   // ── Shell ──────────────────────────────────────────────────
   const app = document.getElementById("app");
-  let viewEl, inspectorEl, tabbarEl, toolbarEl;
+  let viewEl, inspectorEl, tabbarEl, toolbarEl, bodyEl, sidebarBtn;
 
   function render() {
     applyTheme();
@@ -185,8 +190,11 @@
     const banner = errorBanner();
     if (banner) app.appendChild(banner);
     else app.style.gridTemplateRows = "auto 1fr";
-    const body = h("div", { class: "body" });
+    const body = h("div", { class: "body" + (state.sidebar ? "" : " no-sb") });
+    bodyEl = body;
+    body.style.setProperty("--sb-w", state.sidebarWidth + "px");
     body.appendChild(sidebar());
+    body.appendChild(sidebarResizer());
     const main = h("div", { class: "main" });
     tabbarEl = h("div", { class: "tabbar" });
     viewEl = h("div", { class: "view" });
@@ -209,6 +217,7 @@
     const themeIcon = { auto: "monitor", light: "sun", dark: "moon" }[state.theme];
     const repos = D.repos.map((r) => r.id).join(" · ");
     return h("header", { class: "topbar" },
+      (sidebarBtn = h("button", { class: "icon-btn" + (state.sidebar ? " on" : ""), title: "Toggle side panel ( [ )", "aria-pressed": String(state.sidebar), html: icon("sidebar"), onclick: toggleSidebar })),
       h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("logo") }), "change-view"),
       h("div", { class: "crumbs" },
         h("span", { class: "sep" }, "/"),
@@ -239,6 +248,42 @@
   }
 
   // ── Sidebar ────────────────────────────────────────────────
+  function toggleSidebar() {
+    state.sidebar = !state.sidebar;
+    savePref("cv-sidebar", state.sidebar ? "1" : "0");
+    bodyEl.classList.toggle("no-sb", !state.sidebar);
+    sidebarBtn.classList.toggle("on", state.sidebar);
+    sidebarBtn.setAttribute("aria-pressed", String(state.sidebar));
+  }
+
+  // Drag handle on the sidebar's right edge; double-click resets the width.
+  function sidebarResizer() {
+    const handle = h("div", { class: "sb-resizer", role: "separator", "aria-orientation": "vertical", title: "Drag to resize, double-click to reset" });
+    const setWidth = (w) => {
+      state.sidebarWidth = clampWidth(w);
+      bodyEl.style.setProperty("--sb-w", state.sidebarWidth + "px");
+    };
+    handle.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      handle.setPointerCapture(ev.pointerId);
+      const startX = ev.clientX, startW = state.sidebarWidth;
+      bodyEl.classList.add("resizing");
+      const move = (e) => setWidth(startW + e.clientX - startX);
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        bodyEl.classList.remove("resizing");
+        savePref("cv-sidebar-w", String(state.sidebarWidth));
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+    handle.addEventListener("dblclick", () => { setWidth(SB_DEFAULT); savePref("cv-sidebar-w", String(SB_DEFAULT)); });
+    return handle;
+  }
+
   function sidebar() {
     const sb = h("aside", { class: "sidebar" });
 
@@ -1293,6 +1338,7 @@
   document.addEventListener("keydown", (ev) => {
     if (ev.target.closest && ev.target.closest("input, textarea, select")) return;
     if (ev.key === "Escape") select(null);
+    if (ev.key === "[" && !ev.metaKey && !ev.ctrlKey) toggleSidebar();
     if (ev.key === "/" && state.view === "graph") { const s = document.querySelector(".search"); if (s) { ev.preventDefault(); s.focus(); } }
     const i = ["1", "2", "3", "4"].indexOf(ev.key);
     if (i >= 0 && !ev.metaKey && !ev.ctrlKey) setView(VIEWS[i].id);
