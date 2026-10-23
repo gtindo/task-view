@@ -30,7 +30,7 @@ behaviour. `README.md` describes layout and commands.
 | `make check` | `vet`, `lint` and `test` |
 | `make golden` | Rewrites `cmd/task-view/testdata/valid.golden.json` after an intended output change |
 | `make docs` | Regenerates `docs/TASK_REVIEW.md` from `internal/instructions` |
-| `make release` | Cross-compiled binaries, guides from `docs/` and checksums in `release/` |
+| `make release` | Cross-compiled binaries, guides from `docs/`, the agent skill and checksums in `release/`; a pushed `v*` tag runs it in CI and publishes a GitHub release |
 | `make clean` | Removes build and release output |
 
 ## Package boundaries (enforced by depguard)

@@ -16,21 +16,27 @@ your tests, builds or linters. The only file it writes is the page, in
 
 ## Contents of this folder
 
+These files are attached to every release on the
+[GitHub Releases page](https://github.com/gtindo/task-view/releases).
+
 | File | What it is |
 | --- | --- |
 | `task-view-darwin-arm64` | macOS on Apple silicon (M1 and later) |
 | `task-view-darwin-amd64` | macOS on Intel |
 | `task-view-linux-amd64` | Linux x86-64 (static, no dependencies) |
-| `SHA256SUMS` | Checksums of the three binaries |
+| `task-view-linux-arm64` | Linux ARM64, e.g. Raspberry Pi 4/5, Graviton (static) |
+| `task-view-windows-amd64.exe` | Windows x86-64 |
+| `SHA256SUMS` | Checksums of the five binaries |
 | `TASK_REVIEW.md` | The instructions your agent follows to write the review file |
+| `SKILL.md` | The same workflow packaged as an agent skill |
 | `USER_GUIDE.md` | This guide |
 
 The only thing `task-view` needs at run time is `git` on your `PATH`.
 
 ## 1. Install
 
-Pick the binary for your machine, rename it `task-view` and put it on your
-`PATH`.
+Pick the binary for your machine, rename it `task-view` (`task-view.exe` on
+Windows) and put it on your `PATH`.
 
 macOS (Apple silicon shown; use `darwin-amd64` on Intel):
 
@@ -45,7 +51,7 @@ the developer cannot be verified"), clear the quarantine flag once:
 sudo xattr -d com.apple.quarantine /usr/local/bin/task-view
 ```
 
-Linux:
+Linux (x86-64 shown; use `linux-arm64` on ARM):
 
 ```bash
 sudo install -m 755 task-view-linux-amd64 /usr/local/bin/task-view
@@ -54,12 +60,24 @@ sudo install -m 755 task-view-linux-amd64 /usr/local/bin/task-view
 To install without `sudo`, copy it to `~/.local/bin/task-view` (or any folder
 on your `PATH`) and `chmod +x` it.
 
+Windows (PowerShell): put the binary in a folder of your own and add that
+folder to your user `PATH`, then open a new terminal.
+
+```powershell
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\task-view"
+Move-Item task-view-windows-amd64.exe "$env:LOCALAPPDATA\Programs\task-view\task-view.exe"
+[Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:LOCALAPPDATA\Programs\task-view", "User")
+```
+
 Check it works and, optionally, the checksum:
 
 ```bash
 task-view version
 shasum -a 256 -c SHA256SUMS
 ```
+
+On Windows, compare `certutil -hashfile task-view.exe SHA256` with the
+`task-view-windows-amd64.exe` line of `SHA256SUMS`.
 
 ## 2. Teach your agent the format
 
@@ -79,6 +97,21 @@ When you finish a task, follow TASK_REVIEW.md.
 
 In Claude Code you can also import it directly with a line `@TASK_REVIEW.md`
 in `CLAUDE.md`.
+
+### Or install it as a skill
+
+`SKILL.md` packages the same workflow as an agent skill: the agent loads it
+when it finishes a task, and it tells the agent to run `task-view instructions`,
+so it always matches the installed binary. For Claude Code, put it in the
+repo (or in `~/.claude/skills/` for every repo):
+
+```bash
+mkdir -p .claude/skills/task-review
+cp SKILL.md .claude/skills/task-review/SKILL.md
+```
+
+Other agents that read skills (a `SKILL.md` with `name` and `description`
+front matter) take the same file in their own skills folder.
 
 You don't strictly need the file: the binary prints the same text, so you can
 just ask "run `task-view instructions` and write a review file for this
