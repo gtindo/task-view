@@ -1,12 +1,15 @@
 ---
 name: task-review
-description: Use when you finish a coding task, or when asked to describe an existing commit for review. Writes and validates a task-view review file (.review/change-<task>.json) so a human can inspect the work as a checked graph, flows, diff map and claims.
+description: Use when you finish a coding task, or when asked to describe an existing commit for review. Writes and validates a task-view review file (.review/change-<task>.json) that maps the change - the pieces touched, why, how they relate and the flows they form - so the reviewer reads it as one page instead of rebuilding that structure from a flat diff.
 ---
 
 # Task review
 
-When a task is complete, hand it over as a review file that `task-view` can
-check against Git, instead of only a summary in chat.
+When a task is complete, hand it over as a review file instead of only a
+summary in chat. `task-view` turns it into one page that shows how the change
+fits together: a graph of the pieces you touched, its flows step by step, and
+each piece's code next to your reason for it. It checks every reference you
+give against Git so the map matches the real diff.
 
 1. Run `task-view instructions` and follow the text it prints exactly. It is
    the format and the procedure for the version of `task-view` installed on
