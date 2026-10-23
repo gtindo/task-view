@@ -73,7 +73,9 @@ with uncommitted changes that the review doesn't list.
   unmentioned changes, untested nodes…), and the agent's notes.
 - **Graph:** nodes grouped by repo, endpoints between repos. Fill shows the
   change state, the border shows the reference status. Click a node for its
-  code excerpt with changed lines, its why, its tests and relations.
+  code excerpt with changed lines, its why, its tests and relations; the
+  code box switches between **Diff** and **After** (the code as it reads
+  after the change).
 - **Flows:** one lane per flow, with tests attached under the steps they cover.
 - **Diff map:** every changed file, hunks colored by whether a node covers
   them; expand a file to read its hunks.

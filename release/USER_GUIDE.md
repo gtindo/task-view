@@ -148,7 +148,9 @@ test result is always the agent's word.
 - **Inspector (right):** opens when you click a node, an edge, a hunk or a
   finding group. For a node it shows where it is, why it changed in the agent's
   words, which tests cover it, how it relates to other nodes, and the code with
-  the changed lines highlighted. Drag its left edge to widen it for long code
+  the changed lines highlighted. The code box has two tabs: **Diff** shows the
+  changed lines with what they replaced, **After** shows the whole function
+  (or file) as it reads after the change. Drag its left edge to widen it for long code
   lines; double-click the edge to reset its width.
 
 ### The four views

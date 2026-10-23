@@ -147,6 +147,7 @@
     sidebar: loadPref("cv-sidebar", "1") === "1",
     sidebarWidth: clampWidth(+loadPref("cv-sidebar-w", "320")),
     inspectorWidth: +loadPref("cv-inspector-w", "0") || 0, // 0: CSS default
+    codeMode: loadPref("cv-code", "diff") === "after" ? "after" : "diff",
     legend: loadPref("cv-legend", D.nodes.length > 20 ? "0" : "1") === "1",
   };
   const VIEWS = [
@@ -991,18 +992,28 @@
   }
 
   // ── Code excerpt ───────────────────────────────────────────
-  function codeTable(rows, site) {
+  // after: the final-state code alone, one line-number column, no signs.
+  function codeTable(rows, site, after) {
     const tbody = h("tbody");
     for (const r of rows) {
-      if (r.t === "gap") { tbody.appendChild(h("tr", { class: "gap" }, h("td", { colspan: 4 }, "⋯"))); continue; }
+      if (r.t === "gap") { tbody.appendChild(h("tr", { class: "gap" }, h("td", { colspan: after ? 2 : 4 }, "⋯"))); continue; }
       let codeHTML = r.h || "";
       const isSite = site && r.n === site.line;
       if (isSite && site.contains) codeHTML = markContains(codeHTML, site.contains);
       const sign = r.t === "add" ? "+" : r.t === "del" ? "−" : "";
+      const cells = after
+        ? [h("td", { class: "ln", title: r.t === "add" ? "Changed line" : null }, r.n || "")]
+        : [h("td", { class: "ln" }, r.o || ""), h("td", { class: "ln" }, r.n || ""), h("td", { class: "sg" }, sign)];
       tbody.appendChild(h("tr", { class: `${r.t}${r.f ? " f" : ""}${isSite ? " site" : ""}` },
-        h("td", { class: "ln" }, r.o || ""), h("td", { class: "ln" }, r.n || ""), h("td", { class: "sg" }, sign), h("td", { class: "cd", html: codeHTML || " " })));
+        ...cells, h("td", { class: "cd", html: codeHTML || " " })));
     }
-    return h("div", { class: "code-scroll" }, h("table", { class: "code" }, tbody));
+    return h("div", { class: "code-scroll" }, h("table", { class: "code" + (after ? " after" : "") }, tbody));
+  }
+
+  // The code after the change: the whole file for a `file` ref, otherwise
+  // the excerpt without its removed lines.
+  function afterRows(x) {
+    return x.after || (x.rows || []).filter((r) => r.t !== "del");
   }
 
   // Wraps the first plain-text occurrence of needle in <mark>, across spans.
@@ -1044,12 +1055,34 @@
       h("span", { class: "badge mono", title: kindLabel }, `${stateLabel}`),
       h("span", { class: "badge" }, x.language || "plain text"),
       h("button", { class: "icon-btn copy", title: "Copy path", html: icon("copy", "sm"), onclick: () => navigator.clipboard && navigator.clipboard.writeText(`${x.file}${ref && ref.lines ? ":" + ref.lines[0] : ref && ref.line ? ":" + ref.line : ""}`) })));
-    if (x.note) box.appendChild(h("div", { class: "code-note" }, x.note));
-    else {
-      const site = ref && ref.type === "site" ? { line: opts.actualLine || ref.line, contains: ref.contains } : null;
-      box.appendChild(codeTable(x.rows || [], site));
+    if (x.note) {
+      box.appendChild(h("div", { class: "code-note" }, x.note));
+      return box;
     }
-    if (x.truncated) box.appendChild(h("div", { class: "trunc" }, "Excerpt truncated."));
+    const site = ref && ref.type === "site" ? { line: opts.actualLine || ref.line, contains: ref.contains } : null;
+    // Diff / After tabs only when the excerpt shows a change in the final state.
+    const tabs = x.stateKind === "final" && (x.rows || []).some((r) => r.t === "add" || r.t === "del");
+    const content = h("div");
+    const show = () => {
+      const after = tabs && state.codeMode === "after";
+      content.innerHTML = "";
+      content.appendChild(codeTable(after ? afterRows(x) : x.rows || [], site, after));
+      if (after && x.after ? x.afterTruncated : x.truncated) content.appendChild(h("div", { class: "trunc" }, "Excerpt truncated."));
+    };
+    if (tabs) {
+      const seg = h("div", { class: "seg code-tabs", role: "tablist" });
+      const btns = [["diff", "Diff", "Changed lines with what they replaced"], ["after", "After", "The code as it is after the change"]].map(([mode, label, title]) =>
+        h("button", { class: state.codeMode === mode ? "on" : "", role: "tab", title, "aria-selected": String(state.codeMode === mode), onclick: () => {
+          state.codeMode = mode;
+          savePref("cv-code", mode);
+          btns.forEach((b, i) => { const on = i === (mode === "diff" ? 0 : 1); b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+          show();
+        } }, label));
+      seg.append(...btns);
+      box.firstChild.insertBefore(seg, box.firstChild.querySelector(".fp").nextSibling);
+    }
+    show();
+    box.appendChild(content);
     return box;
   }
 

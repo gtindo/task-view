@@ -471,6 +471,11 @@ table.code tr.del .cd, table.code tr.del .sg { background: var(--row-del); }
 table.code tr.del .ln { background: var(--row-del-num); color: var(--deleted); }
 table.code tr.del .sg { color: var(--deleted); }
 table.code tr.f td.ln:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+table.code.after tr.add .cd { background: none; }
+table.code.after tr.add .ln { background: none; box-shadow: inset 2px 0 0 var(--added); }
+table.code.after tr.add.f td.ln:first-child { box-shadow: inset 3px 0 0 var(--accent), inset 5px 0 0 var(--added); }
+.code-tabs { padding: 1px; }
+.code-tabs button { height: 20px; padding: 0 8px; font-size: 11.5px; }
 table.code tr.ctx.f .cd { background: var(--row-focus); }
 table.code tr.gap td { height: 22px; background: var(--panel-3); color: var(--text-3); text-align: center; font-size: 11px; }
 table.code tr.site .cd { background: color-mix(in srgb, var(--accent) 13%, transparent); }

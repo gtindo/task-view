@@ -323,7 +323,7 @@ The agent's summary and each repo's commit list, then, only if the review file s
 
 | View | Shows | Interaction |
 | --- | --- | --- |
-| Graph | All nodes and edges, grouped in one box per repo, endpoints placed between repo boxes | Click a node: its code excerpt with the changed lines highlighted, its why, its tests and what the agent says about them. Toggle unchanged nodes |
+| Graph | All nodes and edges, grouped in one box per repo, endpoints placed between repo boxes | Click a node: its code excerpt with the changed lines highlighted, its why, its tests and what the agent says about them. The excerpt has two tabs: Diff (changed lines with the removed ones) and After (the referenced range, or the whole file for a `file` ref, as it reads in the final state). Toggle unchanged nodes |
 | Flows | One lane per flow, left to right along `path`, tests attached under the nodes they cover | Click a step: same panel as graph |
 | Diff map | Every changed file, hunks colored by whether a node covers them | Click an uncovered hunk to read it |
 | Claims | Each claim with its evidence and status | Click evidence to see the resolved fact (code excerpt, hunk, commit) |

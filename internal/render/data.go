@@ -32,6 +32,10 @@ type excerpt struct {
 	Rows      []Row  `json:"rows"`
 	Note      string `json:"note,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+	// After is the whole final file for a `file` ref whose rows show only
+	// its hunks; for other refs the page drops the removed rows instead.
+	After          []Row `json:"after,omitempty"`
+	AfterTruncated bool  `json:"afterTruncated,omitempty"`
 }
 
 type commitView struct {
@@ -483,6 +487,17 @@ func (b *builder) excerpt(id string, ref *review.Ref, res *engine.RefResult, del
 					x.Truncated = true
 					break
 				}
+			}
+			for n := 1; n <= lines; n++ {
+				if n > maxRows {
+					x.AfterTruncated = true
+					break
+				}
+				r := Row{T: "ctx", N: n, H: hl[n-1]}
+				if ix.added[n] {
+					r.T = "add"
+				}
+				x.After = append(x.After, r)
 			}
 		default:
 			window(1, lines, [2]int{0, -1})
