@@ -1082,14 +1082,19 @@
       },
     });
 
-    toolbarEl.append(
+    // A review without tests or docs gets no switch for them. Native append
+    // would print a skipped switch as the text "null", so drop it first.
+    const toolbarItems = [
       search,
       el("span", { class: "tb-sep" }),
       toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
       testCount ? toggle("showTests", "Tests", testCount, "Show test nodes") : null,
       docCount ? toggle("showDocs", "Docs", docCount, "Show documentation nodes") : null,
       el("span", { class: "tb-sep" }),
-      directionToggle);
+      directionToggle,
+    ];
+
+    toolbarEl.append(...toolbarItems.filter(Boolean));
   }
 
   function graphControls() {
