@@ -3,5 +3,4 @@ bin/
 dist/
 .DS_Store
 .claude/launch.json
-release/change-view-*
-release/SHA256SUMS
+release/

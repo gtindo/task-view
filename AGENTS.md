@@ -29,7 +29,8 @@ behaviour. `README.md` describes layout and commands.
 | `make lint` | golangci-lint (`.golangci.yml`) and ESLint on `app.js` (`eslint.config.mjs`, run through `npx`) |
 | `make check` | `vet`, `lint` and `test` |
 | `make golden` | Rewrites `cmd/change-view/testdata/valid.golden.json` after an intended output change |
-| `make release` | Cross-compiled binaries, guides and checksums in `release/` |
+| `make docs` | Regenerates `docs/CHANGE_REVIEW.md` from `internal/instructions` |
+| `make release` | Cross-compiled binaries, guides from `docs/` and checksums in `release/` |
 | `make clean` | Removes build and release output |
 
 ## Package boundaries (enforced by depguard)
