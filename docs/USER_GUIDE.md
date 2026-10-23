@@ -1,18 +1,22 @@
 # task-view user guide
 
-`task-view` helps you review the work a coding agent did on a task on its own.
-When the agent finishes the task, it writes a structured account of what it
-did (`.review/change-<task>.json`).
-`task-view` checks that account against your repos and turns it into one HTML
-page you read in the browser: a graph of the change, the flows it touches, a
-map of every changed line, and the claims the agent makes, each marked as a
-checked fact or as the agent's word.
+`task-view` makes it simpler to review code a coding agent wrote. Instead of
+reading a flat list of diffs in your IDE and rebuilding in your head how the
+pieces relate and which paths they change, you read the change as a map.
 
-The checks only confirm that the account matches the diff. They never say
-whether the code is good: that is your job, and the page is there to make it
-faster. The tool reads files and runs read-only Git commands. It never runs
-your tests, builds or linters. The only file it writes is the page, in
-`.review/generated/` unless you choose another path.
+When the agent finishes a task, it describes its change in a review file
+(`.review/change-<task>.json`): the functions, components and tests it
+touched, why, how they relate, and the flows they form. `task-view` turns
+that into one HTML page you read in the browser: a graph of the change, its
+flows step by step, a map of every changed line, and each piece's code next
+to the agent's reason for it.
+
+Before building the page, `task-view` checks every file, line and commit the
+agent points at against your repos, so the map matches the real diff. Those
+checks never say whether the code is good: that is your job, and the page is
+there to make it easier. The tool reads files and runs read-only Git
+commands. It never runs your tests, builds or linters. The only file it
+writes is the page, in `.review/generated/` unless you choose another path.
 
 ## Contents of this folder
 
