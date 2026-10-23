@@ -1,0 +1,76 @@
+{
+  "valid": true,
+  "exitCode": 0,
+  "schemaVersion": 1,
+  "errors": [],
+  "warnings": [
+    {
+      "code": "untested_change",
+      "path": "/nodes/2",
+      "repo": "web",
+      "file": "src/a.ts",
+      "message": "changed node \"const-c\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/3",
+      "repo": "web",
+      "file": "src/new.ts",
+      "message": "changed node \"new\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/4",
+      "repo": "web",
+      "file": "src/old.ts",
+      "message": "changed node \"old\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/5",
+      "repo": "web",
+      "file": "src/renamed.ts",
+      "message": "changed node \"ren\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/6",
+      "repo": "web",
+      "file": "img.png",
+      "message": "changed node \"img\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/7",
+      "repo": "web",
+      "file": "src/untracked.ts",
+      "message": "changed node \"untracked\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/10",
+      "repo": "mock",
+      "file": "handlers.ts",
+      "message": "changed node \"mock-h\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    },
+    {
+      "code": "untested_change",
+      "path": "/nodes/12",
+      "message": "changed node \"ep\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
+      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
+    }
+  ],
+  "summary": {
+    "verified": 19,
+    "contradicted": 0,
+    "unresolved": 0,
+    "agentStatements": 15
+  }
+}

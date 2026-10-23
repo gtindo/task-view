@@ -1,0 +1,23 @@
+version: 2
+project_name: change-view
+builds:
+  - main: ./cmd/change-view
+    binary: change-view
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+checksum:
+  name_template: checksums.txt
+brews:
+  - name: change-view
+    repository:
+      owner: gtindo
+      name: homebrew-tap
+    description: Review views for a coding agent's change, checked against Git.
+    install: bin.install "change-view"
