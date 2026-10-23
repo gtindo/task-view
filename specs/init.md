@@ -126,7 +126,7 @@ The input is one JSON file describing the change as a small graph plus flows and
 | `claims[]` | `{ text, about: [id...], evidence: [ref...] }`: statements such as "the mock response now has a discount field" |
 | `notes[]` | Free text the agent wants the reviewer to see: doubts, shortcuts, things not done |
 
-`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the untested-changes check).
+`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the untested-changes check and the graph's test toggle) and `doc`/`docs` (the graph's doc toggle).
 
 ### Languages
 
@@ -323,7 +323,7 @@ The agent's summary and each repo's commit list, then, only if the review file s
 
 | View | Shows | Interaction |
 | --- | --- | --- |
-| Graph | All nodes and edges, grouped in one box per repo, endpoints placed between repo boxes | Click a node: its code excerpt with the changed lines highlighted, its why, its tests and what the agent says about them. The excerpt has two tabs: Diff (changed lines with the removed ones) and After (the referenced range, or the whole file for a `file` ref, as it reads in the final state). Toggle unchanged nodes |
+| Graph | Source-code nodes and the edges between them, grouped in one box per repo, endpoints placed between repo boxes. Test nodes (kind `test`) and doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file) are hidden until their toggles are on | Click a node: its code excerpt with the changed lines highlighted, its why, its tests and what the agent says about them. The excerpt has two tabs: Diff (changed lines with the removed ones) and After (the referenced range, or the whole file for a `file` ref, as it reads in the final state). Toggle unchanged, test and doc nodes; selecting a hidden node from elsewhere turns its toggle on |
 | Flows | One lane per flow, left to right along `path`, tests attached under the nodes they cover | Click a step: same panel as graph |
 | Diff map | Every changed file, hunks colored by whether a node covers them | Click an uncovered hunk to read it |
 | Claims | Each claim with its evidence and status | Click evidence to see the resolved fact (code excerpt, hunk, commit) |

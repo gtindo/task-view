@@ -138,6 +138,8 @@
     view: "graph",
     sel: null, // {type: node|edge|hunk|findings|file, id}
     showUnchanged: true,
+    showTests: false,
+    showDocs: false,
     direction: "RIGHT",
     diffFilter: "all",
     commitFilter: "",
@@ -428,7 +430,8 @@
   function select(sel) {
     state.sel = sel;
     renderInspector();
-    highlightSelection();
+    if (state.view === "graph" && revealInGraph(sel)) renderView();
+    else highlightSelection();
     writeHash();
   }
 
@@ -488,8 +491,37 @@
     ];
   }
 
+  // The graph opens on source code only; tests and docs sit behind toggles.
+  const DOC_FILE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
+  function nodeGroup(n) {
+    if (n.kind === "test") return "test";
+    if (kindIcon(n.kind) === "doc" || (n.ref && n.ref.file && DOC_FILE.test(n.ref.file))) return "doc";
+    return "source";
+  }
+  function inGraph(n) {
+    const g = nodeGroup(n);
+    return (state.showUnchanged || n.change !== "unchanged") && (g !== "test" || state.showTests) && (g !== "doc" || state.showDocs);
+  }
+
+  // Turns on whichever filters hide the selection; true when one changed.
+  function revealInGraph(sel) {
+    if (!sel || (sel.type !== "node" && sel.type !== "edge")) return false;
+    const e = sel.type === "edge" ? edgeById.get(sel.id) : null;
+    const nodes = (e ? [e.from, e.to] : [sel.id]).map((id) => nodeById.get(id)).filter(Boolean);
+    let changed = false;
+    for (const n of nodes) {
+      if (inGraph(n)) continue;
+      const g = nodeGroup(n);
+      if (n.change === "unchanged") state.showUnchanged = true;
+      if (g === "test") state.showTests = true;
+      if (g === "doc") state.showDocs = true;
+      changed = true;
+    }
+    return changed;
+  }
+
   function graphElements() {
-    const visible = D.nodes.filter((n) => state.showUnchanged || n.change !== "unchanged");
+    const visible = D.nodes.filter(inGraph);
     const ids = new Set(visible.map((n) => n.id));
     const els = [];
     const reposUsed = new Set();
@@ -518,6 +550,11 @@
       h("button", { class: state.direction === "RIGHT" ? "on" : "", onclick: () => { state.direction = "RIGHT"; renderView(); }, title: "Left to right" }, "→"),
       h("button", { class: state.direction === "DOWN" ? "on" : "", onclick: () => { state.direction = "DOWN"; renderView(); }, title: "Top to bottom" }, "↓"));
     const unchangedCount = D.nodes.filter((n) => n.change === "unchanged").length;
+    const testCount = D.nodes.filter((n) => nodeGroup(n) === "test").length;
+    const docCount = D.nodes.filter((n) => nodeGroup(n) === "doc").length;
+    const toggle = (key, label, count, title) => h("label", { class: "toggle", title },
+      h("input", { type: "checkbox", checked: state[key], onchange: (ev) => { state[key] = ev.target.checked; renderView(); } }),
+      h("span", { class: "sw" }), `${label} (${count})`);
     const search = h("input", { class: "search", type: "search", placeholder: "Find node…  /", value: state.query || "",
       oninput: (ev) => { state.query = ev.target.value; applySearch(); },
       onkeydown: (ev) => {
@@ -530,9 +567,9 @@
     toolbarEl.append(
       search,
       h("span", { class: "tb-sep" }),
-      h("label", { class: "toggle", title: "Show nodes the change does not modify" },
-        h("input", { type: "checkbox", checked: state.showUnchanged, onchange: (ev) => { state.showUnchanged = ev.target.checked; renderView(); } }),
-        h("span", { class: "sw" }), `Unchanged (${unchangedCount})`),
+      toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
+      testCount ? toggle("showTests", "Tests", testCount, "Show test nodes") : null,
+      docCount ? toggle("showDocs", "Docs", docCount, "Show documentation nodes") : null,
       h("span", { class: "tb-sep" }), seg);
 
     if (typeof cytoscape === "undefined") {
@@ -1411,5 +1448,6 @@
   mq.addEventListener && mq.addEventListener("change", () => { if (state.theme === "auto" && state.view === "graph") renderView(); });
 
   readHash();
+  revealInGraph(state.sel);
   render();
 })();

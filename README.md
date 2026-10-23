@@ -71,7 +71,8 @@ with uncommitted changes that the review doesn't list.
 - **Header and sidebar:** the agent's summary, each repo's commit list from
   base to final state, findings grouped by kind (contradicted references,
   unmentioned changes, untested nodes…), and the agent's notes.
-- **Graph:** nodes grouped by repo, endpoints between repos. Fill shows the
+- **Graph:** source-code nodes grouped by repo, endpoints between repos;
+  tests and docs are hidden behind toolbar toggles. Fill shows the
   change state, the border shows the reference status. Click a node for its
   code excerpt with changed lines, its why, its tests and relations; the
   code box switches between **Diff** and **After** (the code as it reads
