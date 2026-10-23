@@ -51,122 +51,26 @@ it.
 `task-view` installs for your user only: no `sudo` or administrator rights.
 The only runtime dependency is `git`.
 
-**macOS and Linux.** Paste this into a terminal (zsh or bash). It picks the
-binary for your system and CPU, checks it against the release checksums,
-installs it as `~/.local/bin/task-view`, clears the macOS quarantine flag and
-adds `~/.local/bin` to your `PATH` if needed. Run it again to update.
+**macOS and Linux:**
 
 ```bash
-(
-  set -eu
-
-  version=latest        # or a tag such as v1.0.0
-  dir="$HOME/.local/bin"
-
-  case "$(uname -s)" in
-    Darwin) os=darwin ;;
-    Linux) os=linux ;;
-    *) echo "Unsupported system: $(uname -s)" >&2; exit 1 ;;
-  esac
-
-  case "$(uname -m)" in
-    x86_64 | amd64) arch=amd64 ;;
-    arm64 | aarch64) arch=arm64 ;;
-    *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
-  esac
-
-  file="task-view-$os-$arch"
-  base="https://github.com/gtindo/task-view/releases/latest/download"
-  [ "$version" = latest ] || base="https://github.com/gtindo/task-view/releases/download/$version"
-
-  tmp="$(mktemp -d)"
-  echo "Downloading $file ($version)..."
-  curl -fsSL "$base/$file" -o "$tmp/$file"
-  curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
-
-  cd "$tmp"
-  if command -v sha256sum >/dev/null 2>&1; then
-    grep " $file\$" SHA256SUMS | sha256sum -c -
-  else
-    grep " $file\$" SHA256SUMS | shasum -a 256 -c -
-  fi
-  cd - >/dev/null
-
-  mkdir -p "$dir"
-  mv "$tmp/$file" "$dir/task-view"
-  chmod 755 "$dir/task-view"
-  rm -f "$tmp/SHA256SUMS"
-  rmdir "$tmp"
-
-  # A binary downloaded by a browser is quarantined by macOS Gatekeeper and
-  # refuses to start; clearing the flag is harmless when it is not set.
-  if [ "$os" = darwin ]; then
-    xattr -d com.apple.quarantine "$dir/task-view" 2>/dev/null || true
-  fi
-
-  "$dir/task-view" version
-
-  case ":$PATH:" in
-    *":$dir:"*) echo "Installed $dir/task-view" ;;
-    *)
-      case "${SHELL##*/}" in
-        zsh) rc="$HOME/.zshrc" ;;
-        bash) [ "$os" = darwin ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
-        *) rc="$HOME/.profile" ;;
-      esac
-      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
-      echo "Installed $dir/task-view and added $dir to PATH in $rc."
-      echo "Open a new terminal, or run: export PATH=\"$dir:\$PATH\""
-      ;;
-  esac
-)
+curl -fsSL https://raw.githubusercontent.com/gtindo/task-view/main/scripts/install.sh | sh
 ```
 
-**Windows.** Paste this into PowerShell. It does the same, installing
-`task-view.exe` in `%LOCALAPPDATA%\Programs\task-view` and adding that folder
-to your user `PATH`.
+**Windows (PowerShell):**
 
 ```powershell
-& {
-  $ErrorActionPreference = "Stop"
-  $ProgressPreference = "SilentlyContinue"
-  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-  $version = "latest"   # or a tag such as v1.0.0
-  $dir = Join-Path $env:LOCALAPPDATA "Programs\task-view"
-  $file = "task-view-windows-amd64.exe"
-  $base = "https://github.com/gtindo/task-view/releases/latest/download"
-  if ($version -ne "latest") { $base = "https://github.com/gtindo/task-view/releases/download/$version" }
-
-  $tmp = Join-Path $env:TEMP $file
-  $sums = Join-Path $env:TEMP "task-view-SHA256SUMS"
-  Write-Host "Downloading $file ($version)..."
-  Invoke-WebRequest "$base/$file" -OutFile $tmp -UseBasicParsing
-  Invoke-WebRequest "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing
-
-  $expected = (Select-String -Path $sums -Pattern " $file$").Line.Split(" ")[0]
-  $actual = (Get-FileHash $tmp -Algorithm SHA256).Hash
-  Remove-Item $sums
-  if ($actual -ne $expected) { Remove-Item $tmp; throw "Checksum mismatch for $file" }
-
-  New-Item -ItemType Directory -Force $dir | Out-Null
-  $exe = Join-Path $dir "task-view.exe"
-  Move-Item -Force $tmp $exe
-  Unblock-File $exe
-  & $exe version
-
-  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  if (($userPath -split ";") -notcontains $dir) {
-    $newPath = if ($userPath) { "$userPath;$dir" } else { $dir }
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-    Write-Host "Installed $exe and added $dir to your PATH. Open a new terminal."
-  } else {
-    Write-Host "Installed $exe"
-  }
-}
+irm https://raw.githubusercontent.com/gtindo/task-view/main/scripts/install.ps1 | iex
 ```
 
-Open a new terminal afterwards so the `PATH` change applies.
+The scripts ([install.sh](scripts/install.sh), [install.ps1](scripts/install.ps1))
+pick the binary for your system and CPU from the latest release, check it
+against the release checksums, install it in `~/.local/bin` (or
+`%LOCALAPPDATA%\Programs\task-view` on Windows), clear the macOS quarantine
+flag and add the folder to your `PATH` if needed. Open a new terminal
+afterwards; run the same command again to update. The
+[user guide](docs/USER_GUIDE.md#1-install) shows how to pin a version or
+read the script before running it.
 
 ### Other ways to install
 
@@ -385,8 +289,8 @@ Schema, structural rules), `internal/engine` (Git states, diff, reference and
 coverage checks), `internal/render` (view data and the embedded page:
 `assets/app.js`, `assets/app.css`, vendored Cytoscape.js + ELK),
 `internal/langs` (Chroma lexers and highlighting), `internal/instructions`
-(`TASK_REVIEW.md`), `internal/fixture` (test repos), `skills/` (the agent
-skill), `docs` (the user guide, screenshots and a copy of `TASK_REVIEW.md`
+(`TASK_REVIEW.md`), `internal/fixture` (test repos), `scripts/` (the install
+scripts), `skills/` (the agent skill), `docs` (the user guide, screenshots and a copy of `TASK_REVIEW.md`
 regenerated by `make docs`).
 
 Golden output for the accurate fixture review lives in
