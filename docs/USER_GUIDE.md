@@ -45,45 +45,174 @@ The only thing `task-view` needs at run time is `git` on your `PATH`.
 
 ## 1. Install
 
-Pick the binary for your machine, rename it `task-view` (`task-view.exe` on
-Windows) and put it on your `PATH`.
+`task-view` installs for your user only: no `sudo`, no administrator rights.
+The scripts below download the binary for your machine from the latest
+release, check it against `SHA256SUMS`, put it in a folder in your home
+directory and add that folder to your `PATH`. Run the same script again to
+update.
 
-macOS (Apple silicon shown; use `darwin-amd64` on Intel):
+### macOS and Linux
+
+Paste this into a terminal. It works in zsh and bash, picks the right binary
+for your system and CPU, installs it as `~/.local/bin/task-view`, and on
+macOS clears the quarantine flag that would otherwise stop the binary with
+"cannot be opened because the developer cannot be verified". If
+`~/.local/bin` is not on your `PATH` yet, it adds it to your shell's startup
+file (`~/.zshrc`, `~/.bash_profile` on macOS or `~/.bashrc` on Linux).
 
 ```bash
-sudo install -m 755 task-view-darwin-arm64 /usr/local/bin/task-view
+(
+  set -eu
+
+  version=latest        # or a tag such as v1.0.0
+  dir="$HOME/.local/bin"
+
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) echo "Unsupported system: $(uname -s)" >&2; exit 1 ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  file="task-view-$os-$arch"
+  base="https://github.com/gtindo/task-view/releases/latest/download"
+  [ "$version" = latest ] || base="https://github.com/gtindo/task-view/releases/download/$version"
+
+  tmp="$(mktemp -d)"
+  echo "Downloading $file ($version)..."
+  curl -fsSL "$base/$file" -o "$tmp/$file"
+  curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
+
+  cd "$tmp"
+  if command -v sha256sum >/dev/null 2>&1; then
+    grep " $file\$" SHA256SUMS | sha256sum -c -
+  else
+    grep " $file\$" SHA256SUMS | shasum -a 256 -c -
+  fi
+  cd - >/dev/null
+
+  mkdir -p "$dir"
+  mv "$tmp/$file" "$dir/task-view"
+  chmod 755 "$dir/task-view"
+  rm -f "$tmp/SHA256SUMS"
+  rmdir "$tmp"
+
+  # A binary downloaded by a browser is quarantined by macOS Gatekeeper and
+  # refuses to start; clearing the flag is harmless when it is not set.
+  if [ "$os" = darwin ]; then
+    xattr -d com.apple.quarantine "$dir/task-view" 2>/dev/null || true
+  fi
+
+  "$dir/task-view" version
+
+  case ":$PATH:" in
+    *":$dir:"*) echo "Installed $dir/task-view" ;;
+    *)
+      case "${SHELL##*/}" in
+        zsh) rc="$HOME/.zshrc" ;;
+        bash) [ "$os" = darwin ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
+      esac
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+      echo "Installed $dir/task-view and added $dir to PATH in $rc."
+      echo "Open a new terminal, or run: export PATH=\"$dir:\$PATH\""
+      ;;
+  esac
+)
 ```
 
-If macOS blocks the binary because it was downloaded ("cannot be opened because
-the developer cannot be verified"), clear the quarantine flag once:
+Open a new terminal afterwards so the `PATH` change applies. To pin a
+version, change `version=latest` to a tag such as `version=v1.0.0`.
+
+### Windows
+
+Paste this into PowerShell. It installs `task-view.exe` in
+`%LOCALAPPDATA%\Programs\task-view`, removes the "downloaded from the
+internet" mark so Windows doesn't block it, and adds the folder to your user
+`PATH`.
+
+```powershell
+& {
+  $ErrorActionPreference = "Stop"
+  $ProgressPreference = "SilentlyContinue"
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+  $version = "latest"   # or a tag such as v1.0.0
+  $dir = Join-Path $env:LOCALAPPDATA "Programs\task-view"
+  $file = "task-view-windows-amd64.exe"
+  $base = "https://github.com/gtindo/task-view/releases/latest/download"
+  if ($version -ne "latest") { $base = "https://github.com/gtindo/task-view/releases/download/$version" }
+
+  $tmp = Join-Path $env:TEMP $file
+  $sums = Join-Path $env:TEMP "task-view-SHA256SUMS"
+  Write-Host "Downloading $file ($version)..."
+  Invoke-WebRequest "$base/$file" -OutFile $tmp -UseBasicParsing
+  Invoke-WebRequest "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing
+
+  $expected = (Select-String -Path $sums -Pattern " $file$").Line.Split(" ")[0]
+  $actual = (Get-FileHash $tmp -Algorithm SHA256).Hash
+  Remove-Item $sums
+  if ($actual -ne $expected) { Remove-Item $tmp; throw "Checksum mismatch for $file" }
+
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $exe = Join-Path $dir "task-view.exe"
+  Move-Item -Force $tmp $exe
+  Unblock-File $exe
+  & $exe version
+
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (($userPath -split ";") -notcontains $dir) {
+    $newPath = if ($userPath) { "$userPath;$dir" } else { $dir }
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    Write-Host "Installed $exe and added $dir to your PATH. Open a new terminal."
+  } else {
+    Write-Host "Installed $exe"
+  }
+}
+```
+
+Open a new terminal afterwards so the `PATH` change applies.
+
+### Manual install
+
+If you'd rather not run a script, download the file for your machine from the
+[releases page](https://github.com/gtindo/task-view/releases) and install it
+yourself. macOS (Apple silicon shown; use `darwin-amd64` on Intel):
 
 ```bash
-sudo xattr -d com.apple.quarantine /usr/local/bin/task-view
+mkdir -p ~/.local/bin
+install -m 755 ~/Downloads/task-view-darwin-arm64 ~/.local/bin/task-view
+xattr -d com.apple.quarantine ~/.local/bin/task-view 2>/dev/null || true
 ```
 
 Linux (x86-64 shown; use `linux-arm64` on ARM):
 
 ```bash
-sudo install -m 755 task-view-linux-amd64 /usr/local/bin/task-view
+mkdir -p ~/.local/bin
+install -m 755 ~/Downloads/task-view-linux-amd64 ~/.local/bin/task-view
 ```
 
-To install without `sudo`, copy it to `~/.local/bin/task-view` (or any folder
-on your `PATH`) and `chmod +x` it.
+If `~/.local/bin` is not on your `PATH`, add this line to `~/.zshrc` or
+`~/.bashrc` and open a new terminal:
 
-Windows (PowerShell): put the binary in a folder of your own and add that
-folder to your user `PATH`, then open a new terminal.
-
-```powershell
-New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\task-view"
-Move-Item task-view-windows-amd64.exe "$env:LOCALAPPDATA\Programs\task-view\task-view.exe"
-[Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:LOCALAPPDATA\Programs\task-view", "User")
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Check it works and, optionally, the checksum:
+To install for every user instead, copy the binary to `/usr/local/bin` with
+`sudo`.
+
+Check it works, and optionally the checksum, from the folder holding the
+downloads:
 
 ```bash
 task-view version
-shasum -a 256 -c SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing   # or sha256sum on Linux
 ```
 
 On Windows, compare `certutil -hashfile task-view.exe SHA256` with the

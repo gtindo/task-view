@@ -48,8 +48,15 @@ it.
 
 ## Install
 
-Download the binary for your machine from the
-[latest release](https://github.com/gtindo/task-view/releases/latest):
+No `sudo` or administrator rights needed: `task-view` installs for your user
+only. The [user guide](docs/USER_GUIDE.md#1-install) has copy-paste install
+scripts for macOS, Linux and Windows. They pick the right binary, check its
+checksum, put it in `~/.local/bin` (or `%LOCALAPPDATA%\Programs\task-view`),
+add that folder to your `PATH`, and on macOS clear the quarantine flag.
+
+Or download the binary for your machine from the
+[latest release](https://github.com/gtindo/task-view/releases/latest)
+yourself:
 
 | Platform | File |
 | --- | --- |
@@ -59,16 +66,8 @@ Download the binary for your machine from the
 | Linux, ARM64 | `task-view-linux-arm64` |
 | Windows, x86-64 | `task-view-windows-amd64.exe` |
 
-On macOS or Linux, one command does it (swap in your file name from the
-table):
-
-```bash
-curl -fsSL https://github.com/gtindo/task-view/releases/latest/download/task-view-darwin-arm64 -o task-view && chmod +x task-view && sudo mv task-view /usr/local/bin/
-```
-
-Otherwise rename the file `task-view` (`task-view.exe` on Windows) and put it
-on your `PATH`; the [user guide](docs/USER_GUIDE.md#1-install) has the exact
-commands for each platform, Windows included. Or build it with Go:
+and rename it `task-view` (`task-view.exe` on Windows) in a folder on your
+`PATH`. Or build it with Go:
 
 ```bash
 go install github.com/gtindo/task-view/cmd/task-view@latest
