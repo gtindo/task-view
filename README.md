@@ -312,6 +312,14 @@ git push origin v0.2.0
 
 `make release VERSION=0.2.0` builds the same `release/` folder locally.
 
+## Contributing
+
+`task-view` is a personal tool and a raw idea, built in a day. I don't accept
+issues or pull requests. If it fits most of your workflow but you want
+something different, fork it: the specification ([specs/init.md](specs/init.md)),
+code rules ([AGENTS.md](AGENTS.md)) and golden tests are there so your own
+agent can reshape it safely.
+
 ## License
 
 `task-view` is released under the [MIT License](LICENSE). The page embeds
