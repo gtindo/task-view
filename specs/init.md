@@ -55,14 +55,16 @@ The visualizer ships as one static Go binary, `change-view`, with no runtime dep
 
 | Command | What it does | Used by |
 | --- | --- | --- |
-| `change-view validate <file> [--format text\|json]` | Schema validation, then chain, reference and diff-level checks. No browser. Exit codes below | Agent, after writing the review file |
-| `change-view open <file> [--out <path>] [--no-browser]` | Runs the same checks, then writes one self-contained HTML file (default: a temp folder) and opens it in the default browser. Exit 2 or 3: no page, prints the errors. Exit 1: page is generated with a red banner listing the errors, so a reviewer still sees the account | Developer |
+| `change-view validate <file> [--format text\|json] [--scan-siblings]` | Schema validation, then chain, reference and diff-level checks. No browser. Exit codes below | Agent, after writing the review file |
+| `change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Runs the same checks, then writes one self-contained HTML file (default: a temp folder) and opens it in the default browser. Exit 2 or 3: no page, prints the errors. Exit 1: page is generated with a red banner listing the errors, so a reviewer still sees the account | Developer |
 | `change-view schema` | Prints the JSON Schema of the review file | Agent, editors |
 | `change-view languages` | Prints valid language names, one per line, with their usual file extensions | Agent |
 | `change-view instructions` | Prints the agent context file matching this binary's schema version | Developer, to install or refresh the context file |
 | `change-view version` | Binary version and supported schema versions | Both |
 
 The review file path may be absolute or relative to the current directory. Repo paths inside it are resolved as described in the schema rules.
+
+Only the listed repos are read. `--scan-siblings` opts in to the unlisted-repo check, which also looks at the folders next to them (see diff-level checks).
 
 ### Validate output
 
@@ -260,9 +262,9 @@ Tests are nodes with `file` or `range` refs like any code, so the visualizer can
 These run regardless of what the agent wrote and are shown at the top of every view:
 
 - **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file` or `range`. Listed per file with line counts.
-- **Unlisted repos:** sibling repos (same parent folders as listed repos, one level deep) with uncommitted changes that are not in `repos[]`.
+- **Unlisted repos** (only with `--scan-siblings`): sibling repos (same parent folders as listed repos, one level deep) with uncommitted changes that are not in `repos[]`.
 - **Changed tests:** files the agent marked as `test` nodes that changed in the diff, shown next to the code they claim to test.
-- **Untested changed nodes:** changed non-test nodes with no `tests` edge from a test node whose ref is Verified.
+- **Untested changed nodes:** changed non-test nodes with no `tests` edge from a test node whose ref is Verified. Nodes on non-source files are skipped: binary files, and files whose language is documentation, data or configuration (`markdown`, `restructuredtext`, `plaintext`, `org`, `tex`, `bibtex`, `groff`, `csv`, `json`, `yaml`, `toml`, `ini`, `properties`, `xml`, `diff`, `reg`).
 - **Changed but unreferenced test code:** hunks in files that hold test nodes but fall outside every test node's range (for example an edited assertion the agent didn't mention).
 
 ### What the visualizer never checks
@@ -301,8 +303,8 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 | `site_offset` | Warning | `contains` found up to 2 lines from `line`; hint gives the actual line |
 | `unmentioned_hunk` | Warning | Changed lines covered by no node |
 | `unreferenced_test_hunk` | Warning | Changed lines in a test file outside every test node |
-| `untested_change` | Warning | Changed non-test node with no `tests` edge from a verified test node |
-| `unlisted_repo` | Warning | Sibling repo with uncommitted changes not in `repos` |
+| `untested_change` | Warning | Changed non-test node on source code with no `tests` edge from a verified test node |
+| `unlisted_repo` | Warning | Sibling repo with uncommitted changes not in `repos`; only with `--scan-siblings` |
 | `uncommitted_changes` | Warning | Listed repo has uncommitted changes but no `WORKTREE` entry |
 | `head_ahead` | Warning | Branch has commits after `commits[0]` |
 | `worktree_changed` | Warning | A referenced file changed during the run |
@@ -433,8 +435,11 @@ Add a `site` ref pointing at the line where the relation happens:
 ~~~
 
 `contains` is a short exact substring of that line. If you can't point at a
-line, omit `ref`; never guess. Every changed non-test node should have at
-least one `tests` edge from a test node, or a note saying why not.
+line, omit `ref`; never guess. Every changed non-test node on source code
+should have at least one `tests` edge from a test node, or a note saying why
+not. Nodes on documentation, data or config files (Markdown, plain text,
+JSON, YAML, TOML, INI, XML…) or binary files need neither: the tool does not
+check them for tests, so write no notes about their tests.
 
 ## Flows
 

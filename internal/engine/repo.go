@@ -94,6 +94,18 @@ func (s *RepoState) Language(file, override string) string {
 	return ""
 }
 
+// nonSource reports whether a ref points at a file that is not source code:
+// a binary file, or one whose language is documentation, data or config.
+func (s *RepoState) nonSource(ref *review.Ref) bool {
+	if ref.File == "" {
+		return false
+	}
+	if fd := s.Diff(ref.File); fd != nil && fd.Binary {
+		return true
+	}
+	return langs.NonSource(s.Language(ref.File, ref.Language))
+}
+
 // StateSHA maps a state name onto the commit it reads (or WORKTREE).
 func (s *RepoState) StateSHA(state string) string {
 	switch state {

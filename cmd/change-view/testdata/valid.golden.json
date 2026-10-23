@@ -38,14 +38,6 @@
     },
     {
       "code": "untested_change",
-      "path": "/nodes/6",
-      "repo": "web",
-      "file": "img.png",
-      "message": "changed node \"img\" has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)",
-      "hint": "add a test node and a `tests` edge to this node, or say in notes why it is not tested"
-    },
-    {
-      "code": "untested_change",
       "path": "/nodes/7",
       "repo": "web",
       "file": "src/untracked.ts",

@@ -163,15 +163,18 @@ svg.i.lg { width: 18px; height: 18px; }
 .link { background: none; border: 0; padding: 0; color: var(--accent-text); cursor: pointer; font-weight: 500; }
 .link:hover { text-decoration: underline; }
 
-.body { --sb-w: 320px; position: relative; display: grid; grid-template-columns: var(--sb-w) minmax(0, 1fr) auto; min-height: 0; }
+.body { --sb-w: 320px; position: relative; min-width: 0; display: grid; grid-template-columns: var(--sb-w) minmax(0, 1fr) auto; min-height: 0; }
 .body.no-sb { grid-template-columns: 0 minmax(0, 1fr) auto; }
 .body.no-sb .sidebar { visibility: hidden; border-right: 0; }
 .body.no-sb .sb-resizer { display: none; }
 .body.resizing { cursor: col-resize; user-select: none; }
-.body.resizing .main { pointer-events: none; }
+.body.resizing .main, .body.resizing .inspector > :not(.ins-resizer) { pointer-events: none; }
+.body.resizing .inspector { transition: none; }
 .sb-resizer { position: absolute; top: 0; bottom: 0; left: calc(var(--sb-w) - 3px); width: 6px; z-index: 5; cursor: col-resize; touch-action: none; }
 .sb-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background 0.12s; }
-.sb-resizer:hover::after, .body.resizing .sb-resizer::after { background: var(--accent); }
+.ins-resizer { position: absolute; top: 0; bottom: 0; left: 0; width: 6px; z-index: 5; cursor: col-resize; touch-action: none; }
+.ins-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: transparent; transition: background 0.12s; }
+.sb-resizer:hover::after, .ins-resizer:hover::after, .sb-resizer.dragging::after, .ins-resizer.dragging::after { background: var(--accent); }
 
 /* ── Sidebar ─────────────────────────────────────────────── */
 .sidebar { border-right: 1px solid var(--border); background: var(--panel); overflow-y: auto; min-height: 0; }
@@ -508,7 +511,7 @@ table.code mark { background: color-mix(in srgb, #facc15 45%, transparent); colo
   position: relative; z-index: 1; width: 0; overflow: hidden; border-left: 1px solid var(--border); background: var(--panel); transition: width 0.18s ease;
   display: flex; flex-direction: column; min-height: 0;
 }
-.inspector.on { width: min(560px, 46vw); }
+.inspector.on { width: var(--ins-w, min(560px, 46vw)); max-width: calc(100vw - 360px); }
 .ins-head { display: flex; align-items: flex-start; gap: 11px; padding: 16px 16px 12px; border-bottom: 1px solid var(--border); min-width: 380px; }
 .ins-icon { width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center; background: var(--panel-3); color: var(--text-2); }
 .ins-icon.added { background: var(--added-bg); color: var(--added); }
@@ -573,7 +576,7 @@ table.code mark { background: color-mix(in srgb, #facc15 45%, transparent); colo
 @media (max-width: 1100px) {
   .body:not(.no-sb) { grid-template-columns: min(var(--sb-w), 300px) minmax(0, 1fr) auto; }
   .sb-resizer { display: none; }
-  .inspector.on { width: min(520px, 60vw); }
+  .inspector.on { width: var(--ins-w, min(520px, 60vw)); }
 }
 @media (max-width: 760px) {
   body { overflow: auto; }
@@ -582,7 +585,8 @@ table.code mark { background: color-mix(in srgb, #facc15 45%, transparent); colo
   .body.no-sb .sidebar { display: none; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); max-height: none; }
   .main { min-height: 80vh; }
-  .inspector.on { position: fixed; inset: 0; width: 100%; z-index: 40; }
+  .inspector.on { position: fixed; inset: 0; width: 100%; max-width: none; z-index: 40; }
+  .ins-resizer { display: none; }
   .pills .pill span { display: none; }
   .crumbs { display: none; }
   .frow { grid-template-columns: 18px 24px 1fr 70px; }

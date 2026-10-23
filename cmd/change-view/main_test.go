@@ -45,7 +45,7 @@ func validate(t *testing.T, s *fixture.Set, r *review.Review, extra ...string) r
 	if err != nil {
 		t.Fatal(err)
 	}
-	return validateRaw(t, s, data, append([]string{"--no-sibling-scan"}, extra...)...)
+	return validateRaw(t, s, data, extra...)
 }
 
 func codes(fs []review.Finding) map[string]int {
@@ -143,9 +143,9 @@ func TestCodes(t *testing.T) {
 			var res result
 			switch {
 			case c.raw != nil && c.code == "unlisted_repo":
-				res = validateRaw(t, s, c.raw(s))
+				res = validateRaw(t, s, c.raw(s), "--scan-siblings")
 			case c.raw != nil:
-				res = validateRaw(t, s, c.raw(s), "--no-sibling-scan")
+				res = validateRaw(t, s, c.raw(s))
 			default:
 				r := s.Review()
 				c.mutate(r, s)
@@ -164,6 +164,35 @@ func TestCodes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSiblingsNotScannedByDefault(t *testing.T) {
+	s := fixture.Build(t)
+	res := validate(t, s, s.Review())
+	if n := codes(res.out.Warnings)["unlisted_repo"]; n != 0 {
+		t.Fatalf("unlisted_repo without --scan-siblings:\n%s", res.raw)
+	}
+}
+
+func TestUntestedSkipsNonSource(t *testing.T) {
+	s := fixture.Build(t)
+	r := s.Review()
+	r.Nodes[2].Ref.Language = "yaml" // const-c, otherwise untested
+	res := validate(t, s, r)
+	for _, f := range res.out.Warnings {
+		if f.Code != "untested_change" {
+			continue
+		}
+		if f.Path == "/nodes/2" || f.Path == "/nodes/6" { // yaml, binary image
+			t.Errorf("untested_change on non-source node %s", f.Path)
+		}
+		if f.Path == "/nodes/0" {
+			t.Errorf("fn-a has a tests edge but is reported untested")
+		}
+	}
+	if codes(res.out.Warnings)["untested_change"] == 0 {
+		t.Fatalf("source nodes should still be reported untested:\n%s", res.raw)
 	}
 }
 
@@ -191,7 +220,7 @@ func TestOpenWritesPage(t *testing.T) {
 	os.WriteFile(path, data, 0o644)
 	page := filepath.Join(t.TempDir(), "review.html")
 	var out bytes.Buffer
-	if exit := run([]string{"open", path, "--no-browser", "--no-sibling-scan", "--out", page}, &out, &out); exit != 0 {
+	if exit := run([]string{"open", path, "--no-browser", "--out", page}, &out, &out); exit != 0 {
 		t.Fatalf("exit %d\n%s", exit, out.String())
 	}
 	html, err := os.ReadFile(page)

@@ -26,8 +26,8 @@ var version = "0.1.0-dev"
 const usage = `change-view — review views for a coding agent's change
 
 Usage:
-  change-view validate <file> [--format text|json]
-  change-view open <file> [--out <path>] [--no-browser]
+  change-view validate <file> [--format text|json] [--scan-siblings]
+  change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]
   change-view schema
   change-view languages
   change-view instructions
@@ -102,13 +102,14 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	format := fs.String("format", "text", "output format: text or json")
-	skipSiblings := fs.Bool("no-sibling-scan", false, "skip the unlisted sibling repo scan")
+	scanSiblings := fs.Bool("scan-siblings", false, "also warn about dirty Git repos next to the listed repos")
+	fs.Bool("no-sibling-scan", false, "ignored: siblings are only scanned with --scan-siblings")
 	pos, err := parse(fs, args)
 	if err != nil || len(pos) != 1 {
-		fmt.Fprint(stderr, "usage: change-view validate <file> [--format text|json]\n")
+		fmt.Fprint(stderr, "usage: change-view validate <file> [--format text|json] [--scan-siblings]\n")
 		return 2
 	}
-	e := engine.Run(pos[0], engine.Options{SkipSiblings: *skipSiblings})
+	e := engine.Run(pos[0], engine.Options{ScanSiblings: *scanSiblings})
 	switch *format {
 	case "json":
 		writeJSON(stdout, e)
@@ -191,14 +192,15 @@ func cmdOpen(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	out := fs.String("out", "", "where to write the HTML file (default: a temp folder)")
 	noBrowser := fs.Bool("no-browser", false, "write the page without opening it")
-	skipSiblings := fs.Bool("no-sibling-scan", false, "skip the unlisted sibling repo scan")
+	scanSiblings := fs.Bool("scan-siblings", false, "also warn about dirty Git repos next to the listed repos")
+	fs.Bool("no-sibling-scan", false, "ignored: siblings are only scanned with --scan-siblings")
 	pos, err := parse(fs, args)
 	if err != nil || len(pos) != 1 {
-		fmt.Fprint(stderr, "usage: change-view open <file> [--out <path>] [--no-browser]\n")
+		fmt.Fprint(stderr, "usage: change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]\n")
 		return 2
 	}
 
-	e := engine.Run(pos[0], engine.Options{SkipSiblings: *skipSiblings})
+	e := engine.Run(pos[0], engine.Options{ScanSiblings: *scanSiblings})
 	if e.ExitCode >= review.ExitSchema {
 		writeText(stderr, pos[0], e)
 		fmt.Fprintln(stderr, "\nno page generated: fix the errors above, then run open again")

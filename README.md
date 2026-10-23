@@ -55,14 +55,16 @@ You can also ask an agent to describe an existing commit: "Run
 
 | Command | What it does |
 | --- | --- |
-| `change-view validate <file> [--format text\|json]` | Schema, commit chain, reference and diff-level checks. Exit 0 ok, 1 contradicted/unresolved refs, 2 invalid file, 3 environment error |
-| `change-view open <file> [--out <path>] [--no-browser]` | Same checks, then writes one offline HTML page and opens it. Exit 1 still renders the page, with a red banner |
+| `change-view validate <file> [--format text\|json] [--scan-siblings]` | Schema, commit chain, reference and diff-level checks. Exit 0 ok, 1 contradicted/unresolved refs, 2 invalid file, 3 environment error |
+| `change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Same checks, then writes one offline HTML page and opens it. Exit 1 still renders the page, with a red banner |
 | `change-view schema` | JSON Schema of the review file |
 | `change-view languages` | Valid language names and their usual file patterns |
 | `change-view instructions` | The agent context file for this binary's schema version |
 | `change-view version` | Binary and supported schema versions |
 
-`--no-sibling-scan` skips the `unlisted_repo` scan of sibling folders.
+Only the repos listed in the review file are read. `--scan-siblings` also
+looks at the folders next to them and warns (`unlisted_repo`) about Git repos
+with uncommitted changes that the review doesn't list.
 
 ## The page
 
@@ -77,8 +79,10 @@ You can also ask an agent to describe an existing commit: "Run
   them; expand a file to read its hunks.
 - **Claims:** each claim with its evidence and the resolved fact.
 
-Keys: `1`–`4` switch views, `Esc` closes the inspector. The page follows the
-system theme; the button in the top bar cycles auto / light / dark.
+Keys: `1`–`4` switch views, `Esc` closes the inspector. Drag the inner edge
+of the side panel or the inspector to resize it (double-click resets). The
+page follows the system theme; the button in the top bar cycles auto / light /
+dark.
 
 ## Development
 

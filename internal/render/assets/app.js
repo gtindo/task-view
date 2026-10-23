@@ -130,7 +130,7 @@
   }
 
   // ── State & routing ────────────────────────────────────────
-  const SB_MIN = 220, SB_MAX = 600, SB_DEFAULT = 320;
+  const SB_MIN = 220, SB_MAX = 600, SB_DEFAULT = 320, INS_MIN = 380, MAIN_MIN = 360;
   function clampWidth(w) { return Math.max(SB_MIN, Math.min(SB_MAX, w || SB_DEFAULT)); }
   function loadPref(k, def) { try { return localStorage.getItem(k) || def; } catch { return def; } }
   function savePref(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -146,6 +146,7 @@
     theme: loadPref("cv-theme", "auto"),
     sidebar: loadPref("cv-sidebar", "1") === "1",
     sidebarWidth: clampWidth(+loadPref("cv-sidebar-w", "320")),
+    inspectorWidth: +loadPref("cv-inspector-w", "0") || 0, // 0: CSS default
     legend: loadPref("cv-legend", D.nodes.length > 20 ? "0" : "1") === "1",
   };
   const VIEWS = [
@@ -181,7 +182,7 @@
 
   // ── Shell ──────────────────────────────────────────────────
   const app = document.getElementById("app");
-  let viewEl, inspectorEl, tabbarEl, toolbarEl, bodyEl, sidebarBtn;
+  let viewEl, inspectorEl, inspectorHandle, tabbarEl, toolbarEl, bodyEl, sidebarBtn;
 
   function render() {
     applyTheme();
@@ -201,6 +202,8 @@
     main.append(tabbarEl, viewEl);
     body.appendChild(main);
     inspectorEl = h("aside", { class: "inspector" });
+    inspectorHandle = inspectorResizer();
+    applyInspectorWidth();
     body.appendChild(inspectorEl);
     app.appendChild(body);
     renderTabs();
@@ -256,32 +259,41 @@
     sidebarBtn.setAttribute("aria-pressed", String(state.sidebar));
   }
 
-  // Drag handle on the sidebar's right edge; double-click resets the width.
-  function sidebarResizer() {
-    const handle = h("div", { class: "sb-resizer", role: "separator", "aria-orientation": "vertical", title: "Drag to resize, double-click to reset" });
-    const setWidth = (w) => {
-      state.sidebarWidth = clampWidth(w);
-      bodyEl.style.setProperty("--sb-w", state.sidebarWidth + "px");
-    };
+  // Drag handle on a panel edge; double-click resets the width. sign is 1
+  // when dragging right widens the panel, -1 when dragging left does.
+  function dragHandle(cls, sign, getWidth, setWidth, onDone, onReset) {
+    const handle = h("div", { class: cls, role: "separator", "aria-orientation": "vertical", title: "Drag to resize, double-click to reset" });
     handle.addEventListener("pointerdown", (ev) => {
       ev.preventDefault();
       handle.setPointerCapture(ev.pointerId);
-      const startX = ev.clientX, startW = state.sidebarWidth;
+      const startX = ev.clientX, startW = getWidth();
       bodyEl.classList.add("resizing");
-      const move = (e) => setWidth(startW + e.clientX - startX);
+      handle.classList.add("dragging");
+      const move = (e) => setWidth(startW + sign * (e.clientX - startX));
       const up = () => {
         handle.removeEventListener("pointermove", move);
         handle.removeEventListener("pointerup", up);
         handle.removeEventListener("pointercancel", up);
         bodyEl.classList.remove("resizing");
-        savePref("cv-sidebar-w", String(state.sidebarWidth));
+        handle.classList.remove("dragging");
+        onDone();
       };
       handle.addEventListener("pointermove", move);
       handle.addEventListener("pointerup", up);
       handle.addEventListener("pointercancel", up);
     });
-    handle.addEventListener("dblclick", () => { setWidth(SB_DEFAULT); savePref("cv-sidebar-w", String(SB_DEFAULT)); });
+    handle.addEventListener("dblclick", onReset);
     return handle;
+  }
+
+  function sidebarResizer() {
+    const setWidth = (w) => {
+      state.sidebarWidth = clampWidth(w);
+      bodyEl.style.setProperty("--sb-w", state.sidebarWidth + "px");
+    };
+    return dragHandle("sb-resizer", 1, () => state.sidebarWidth, setWidth,
+      () => savePref("cv-sidebar-w", String(state.sidebarWidth)),
+      () => { setWidth(SB_DEFAULT); savePref("cv-sidebar-w", String(SB_DEFAULT)); });
   }
 
   function sidebar() {
@@ -1114,6 +1126,24 @@
   }
 
   // ── Inspector ──────────────────────────────────────────────
+  // Leaves at least MAIN_MIN px for the view between the panels.
+  function clampInspector(w) {
+    const max = window.innerWidth - (state.sidebar ? state.sidebarWidth : 0) - MAIN_MIN;
+    return Math.round(Math.max(INS_MIN, Math.min(max, w)));
+  }
+  function applyInspectorWidth() {
+    if (state.inspectorWidth) inspectorEl.style.setProperty("--ins-w", state.inspectorWidth + "px");
+    else inspectorEl.style.removeProperty("--ins-w");
+  }
+
+  // Drag handle on the inspector's left edge.
+  function inspectorResizer() {
+    return dragHandle("ins-resizer", -1, () => inspectorEl.getBoundingClientRect().width,
+      (w) => { state.inspectorWidth = clampInspector(w); applyInspectorWidth(); },
+      () => savePref("cv-inspector-w", String(state.inspectorWidth)),
+      () => { state.inspectorWidth = 0; applyInspectorWidth(); savePref("cv-inspector-w", "0"); });
+  }
+
   function renderInspector() {
     inspectorEl.innerHTML = "";
     const sel = state.sel;
@@ -1125,7 +1155,7 @@
     else if (sel.type === "findings") content = findingsInspector(sel.id);
     if (!content) { inspectorEl.classList.remove("on"); return; }
     inspectorEl.classList.add("on");
-    inspectorEl.append(...content);
+    inspectorEl.append(inspectorHandle, ...content);
     setTimeout(() => overlay && overlay.__sync && overlay.__sync(), 200);
   }
 

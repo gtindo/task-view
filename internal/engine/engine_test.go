@@ -116,7 +116,7 @@ func TestWorktreeChanged(t *testing.T) {
 	}
 	defer func() { beforeWorktreeCheck = nil }()
 
-	e := Run(path, Options{SkipSiblings: true})
+	e := Run(path, Options{})
 	found := false
 	for _, f := range e.Findings {
 		if f.Code == "worktree_changed" && f.File == "src/a.ts" {

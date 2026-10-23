@@ -18,8 +18,9 @@ var beforeWorktreeCheck func()
 
 // Options tune a run.
 type Options struct {
-	// SkipSiblings disables the unlisted-repo scan (used by tests).
-	SkipSiblings bool
+	// ScanSiblings enables the unlisted-repo scan of folders next to the
+	// listed repos. Off by default: only the listed repos are read.
+	ScanSiblings bool
 }
 
 // HunkCoverage says which nodes cover one hunk of the diff.
@@ -173,7 +174,7 @@ func Run(path string, opts Options) *Engine {
 		beforeWorktreeCheck()
 	}
 	e.checkWorktreeChanged()
-	if !opts.SkipSiblings {
+	if opts.ScanSiblings {
 		e.scanSiblings()
 	}
 	return e.finish()
@@ -460,7 +461,8 @@ func rangeText(r [2]int) string {
 }
 
 // checkUntested warns on changed non-test nodes without a `tests` edge from
-// a verified test node.
+// a verified test node. Nodes on non-source files (documentation, data,
+// configuration, binary assets) are skipped: there is nothing to test.
 func (e *Engine) checkUntested() {
 	tested := map[string]bool{}
 	for _, ed := range e.Review.Edges {
@@ -480,7 +482,7 @@ func (e *Engine) checkUntested() {
 			continue
 		}
 		if n.Ref != nil {
-			if s := e.repoByID[n.Ref.Repo]; s != nil && s.Repo.IsContext() {
+			if s := e.repoByID[n.Ref.Repo]; s != nil && (s.Repo.IsContext() || s.nonSource(n.Ref)) {
 				continue
 			}
 		}

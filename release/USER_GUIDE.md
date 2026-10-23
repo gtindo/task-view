@@ -148,7 +148,8 @@ test result is always the agent's word.
 - **Inspector (right):** opens when you click a node, an edge, a hunk or a
   finding group. For a node it shows where it is, why it changed in the agent's
   words, which tests cover it, how it relates to other nodes, and the code with
-  the changed lines highlighted.
+  the changed lines highlighted. Drag its left edge to widen it for long code
+  lines; double-click the edge to reset its width.
 
 ### The four views
 
@@ -166,9 +167,9 @@ test result is always the agent's word.
 | Contradicted or unresolved references | The account is wrong somewhere: send it back to the agent |
 | Unmentioned changes | Lines changed that no node describes: the agent didn't tell you about them |
 | Unreferenced test code | Test-file changes outside every test case the agent listed (an edited assertion, a helper) |
-| Untested changed nodes | Changed code with no test linked to it; the agent's notes should say why |
+| Untested changed nodes | Changed source code with no test linked to it; the agent's notes should say why. Docs, data, config and binary files are not checked |
 | Work outside the review | Uncommitted files or later commits that this review does not cover |
-| Unlisted repos | Neighbouring repos with uncommitted changes that the review doesn't list. Usually unrelated; check if the change could have touched them |
+| Unlisted repos | Only with `--scan-siblings`: neighbouring repos with uncommitted changes that the review doesn't list. Usually unrelated; check if the change could have touched them |
 
 ### Keyboard
 
@@ -190,9 +191,10 @@ test result is always the agent's word.
 | `change-view languages` | Print the language names usable for syntax colouring |
 | `change-view version` | Print the binary and supported schema versions |
 
-Both `open` and `validate` accept `--no-sibling-scan`, which skips the
-"unlisted repos" scan. Use it when the repo sits in a folder full of other
-projects with uncommitted work.
+`open` and `validate` read only the repos listed in the review file. Pass
+`--scan-siblings` to also look at the folders next to them and list Git repos
+with uncommitted changes that the review doesn't mention, for a change that
+may have spilled into a neighbouring repo.
 
 Exit codes for `validate` and `open`:
 
@@ -209,8 +211,6 @@ Exit codes for `validate` and `open`:
   relative to the root of the Git repo that contains the review file. Run
   `open` from anywhere, but keep the repos where they were when the agent
   wrote the file.
-- **Many "unlisted repo" warnings:** your repos share a parent folder with
-  other dirty projects. Harmless; pass `--no-sibling-scan` to hide them.
 - **The page shows old code after more edits:** the review describes an exact
   state. If you or the agent change files afterwards, ask the agent to
   rewrite and re-validate `change.json`.
