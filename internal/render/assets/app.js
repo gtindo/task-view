@@ -1,29 +1,57 @@
 (function () {
   "use strict";
 
-  const D = JSON.parse(document.getElementById("review-data").textContent);
+  const reviewData = JSON.parse(document.getElementById("review-data").textContent);
 
   // ── Indexes ────────────────────────────────────────────────
-  const nodeById = new Map(D.nodes.map((n, i) => [n.id, Object.assign(n, { index: i })]));
-  const edgeById = new Map(D.edges.map((e) => [e.id, e]));
-  const repoById = new Map(D.repos.map((r) => [r.id, r]));
-  const outEdges = new Map();
-  const inEdges = new Map();
-  for (const e of D.edges) {
-    if (!outEdges.has(e.from)) outEdges.set(e.from, []);
-    if (!inEdges.has(e.to)) inEdges.set(e.to, []);
-    outEdges.get(e.from).push(e);
-    inEdges.get(e.to).push(e);
-  }
-  const testsOf = (id) => (inEdges.get(id) || []).filter((e) => e.kind === "tests" && nodeById.get(e.from)?.kind === "test");
-  const testedBy = (id) => (outEdges.get(id) || []).filter((e) => e.kind === "tests");
-  const allFindings = D.errors.map((f) => Object.assign(f, { level: "error" })).concat(D.warnings.map((f) => Object.assign(f, { level: "warning" })));
+  // Groups items into a Map of arrays, keeping their order within each key.
+  function groupBy(items, keyOf) {
+    const groups = new Map();
 
-  const STATUS_LABEL = { verified: "Verified", contradicted: "Contradicted", unresolved: "Unresolved", agent: "Agent statement" };
-  const CHANGE_LABEL = { added: "Added", modified: "Modified", deleted: "Deleted", unchanged: "Unchanged", renamed: "Renamed" };
+    for (const item of items) {
+      const key = keyOf(item);
+
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+
+    return groups;
+  }
+
+  const nodeById = new Map(reviewData.nodes.map((node) => [node.id, node]));
+  // Findings address nodes by their position in the review file (/nodes/<index>).
+  const nodeIndex = new Map(reviewData.nodes.map((node, i) => [node.id, i]));
+  const edgeById = new Map(reviewData.edges.map((edge) => [edge.id, edge]));
+  const repoById = new Map(reviewData.repos.map((repo) => [repo.id, repo]));
+  const outEdges = groupBy(reviewData.edges, (edge) => edge.from);
+  const inEdges = groupBy(reviewData.edges, (edge) => edge.to);
+  const outgoingEdges = (id) => outEdges.get(id) || [];
+  const incomingEdges = (id) => inEdges.get(id) || [];
+  const testsOf = (id) => incomingEdges(id).filter((edge) => edge.kind === "tests" && nodeById.get(edge.from)?.kind === "test");
+  const testedBy = (id) => outgoingEdges(id).filter((edge) => edge.kind === "tests");
+  // Copies tagged with the list they came from, so the review data keeps its shape.
+  const allFindings = [
+    ...reviewData.errors.map((finding) => ({ ...finding, level: "error" })),
+    ...reviewData.warnings.map((finding) => ({ ...finding, level: "warning" })),
+  ];
+
+  const STATUS_LABEL = {
+    verified: "Verified",
+    contradicted: "Contradicted",
+    unresolved: "Unresolved",
+    agent: "Agent statement",
+  };
+  const CHANGE_LABEL = {
+    added: "Added",
+    modified: "Modified",
+    deleted: "Deleted",
+    unchanged: "Unchanged",
+    renamed: "Renamed",
+  };
+  const isProblemStatus = (status) => status === "contradicted" || status === "unresolved";
 
   // ── Icons ──────────────────────────────────────────────────
-  const P = {
+  const ICON_PATHS = {
     check: '<path d="M20 6 9 17l-5-5"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
     xcircle: '<circle cx="12" cy="12" r="9.5"/><path d="m15 9-6 6M9 9l6 6"/>',
@@ -68,116 +96,229 @@
     target: '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
     tree: '<path d="M3 3h6v6H3zM15 15h6v6h-6zM6 9v6a3 3 0 0 0 3 3h6"/>',
   };
-  const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[name] || P.other}</svg>`;
-  const KIND_ICON = { entry: "entry", code: "code", component: "component", endpoint: "endpoint", test: "test", external: "external",
-    config: "config", migration: "data", data: "data", schema: "data", store: "data", doc: "doc", docs: "doc", function: "code",
-    handler: "code", module: "code", type: "code", hook: "code", route: "entry", page: "entry", ui: "component", screen: "component" };
+  const icon = (name, extraClass = "") =>
+    `<svg class="i ${extraClass}" viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ICON_PATHS.other}</svg>`;
+  const KIND_ICON = {
+    entry: "entry",
+    code: "code",
+    component: "component",
+    endpoint: "endpoint",
+    test: "test",
+    external: "external",
+    config: "config",
+    migration: "data",
+    data: "data",
+    schema: "data",
+    store: "data",
+    doc: "doc",
+    docs: "doc",
+    function: "code",
+    handler: "code",
+    module: "code",
+    type: "code",
+    hook: "code",
+    route: "entry",
+    page: "entry",
+    ui: "component",
+    screen: "component",
+  };
   const kindIcon = (kind) => KIND_ICON[kind] || "other";
-  const STATUS_ICON = { verified: "checkcircle", contradicted: "xcircle", unresolved: "help", agent: "chat" };
+  const STATUS_ICON = {
+    verified: "checkcircle",
+    contradicted: "xcircle",
+    unresolved: "help",
+    agent: "chat",
+  };
 
   // ── DOM helpers ────────────────────────────────────────────
-  function h(tag, attrs, ...kids) {
-    const el = document.createElement(tag);
-    if (attrs) {
-      for (const [k, v] of Object.entries(attrs)) {
-        if (v == null || v === false) continue;
-        if (k === "class") el.className = v;
-        else if (k === "html") el.innerHTML = v;
-        else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
-        else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-        else el.setAttribute(k, v === true ? "" : v);
-      }
+  // Hyperscript: attrs maps class, html, style objects and on* handlers;
+  // null and false attributes and children are skipped.
+  function el(tag, attrs, ...children) {
+    const element = document.createElement(tag);
+
+    for (const [name, value] of Object.entries(attrs || {})) {
+      if (value == null || value === false) continue;
+
+      if (name === "class") element.className = value;
+      else if (name === "html") element.innerHTML = value;
+      else if (name === "style" && typeof value === "object") Object.assign(element.style, value);
+      else if (name.startsWith("on")) element.addEventListener(name.slice(2), value);
+      else element.setAttribute(name, value === true ? "" : value);
     }
-    for (const kid of kids.flat(Infinity)) {
-      if (kid == null || kid === false) continue;
-      el.appendChild(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+
+    for (const child of children.flat(Infinity)) {
+      if (child == null || child === false) continue;
+
+      element.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
     }
-    return el;
+
+    return element;
   }
-  const raw = (html) => { const t = document.createElement("template"); t.innerHTML = html; return t.content; };
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
-  const short = (sha) => (sha === "WORKTREE" ? "WORKTREE" : (sha || "").slice(0, 7));
+
+  function htmlFragment(html) {
+    const template = document.createElement("template");
+
+    template.innerHTML = html;
+
+    return template.content;
+  }
+
+  const HTML_ESCAPES = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  const escapeHTML = (value) => String(value).replace(/[&<>"']/g, (char) => HTML_ESCAPES[char]);
+  const plural = (count, one, many) => `${count} ${count === 1 ? one : many || one + "s"}`;
+  const SHORT_SHA_LENGTH = 7;
+  const shortSha = (sha) => (sha === "WORKTREE" ? "WORKTREE" : (sha || "").slice(0, SHORT_SHA_LENGTH));
+  // "12" for a one-line [12, 12] range, "12–15" otherwise.
+  const rangeText = (range) => (range[0] === range[1] ? range[0] : range[0] + "–" + range[1]);
+  const rangesText = (ranges) => ranges.map(rangeText).join(", ");
 
   function linesText(ref) {
     if (!ref) return "";
-    if (ref.lines) return ref.lines[0] === ref.lines[1] ? `:${ref.lines[0]}` : `:${ref.lines[0]}–${ref.lines[1]}`;
+    if (ref.lines) return `:${rangeText(ref.lines)}`;
     if (ref.line) return `:${ref.line}`;
+
     return "";
   }
+
   function refText(ref) {
     if (!ref) return "";
-    if (ref.type === "commit") return `${ref.repo} @ ${short(ref.sha)}`;
+    if (ref.type === "commit") return `${ref.repo} @ ${shortSha(ref.sha)}`;
+
     return `${ref.file}${linesText(ref)}`;
   }
-  function basename(p) { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); }
-  function dirname(p) { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i + 1); }
+
+  function basename(path) {
+    const slash = path.lastIndexOf("/");
+
+    return slash < 0 ? path : path.slice(slash + 1);
+  }
+
+  function dirname(path) {
+    const slash = path.lastIndexOf("/");
+
+    return slash < 0 ? "" : path.slice(0, slash + 1);
+  }
 
   function statusBadge(status) {
-    return h("span", { class: `badge ${status}`, html: icon(STATUS_ICON[status], "sm") + esc(STATUS_LABEL[status] || status) });
+    return el("span", { class: `badge ${status}`, html: icon(STATUS_ICON[status], "sm") + escapeHTML(STATUS_LABEL[status] || status) });
   }
+
   function changeBadge(change) {
-    return h("span", { class: `badge ${change}` }, CHANGE_LABEL[change] || change);
+    return el("span", { class: `badge ${change}` }, CHANGE_LABEL[change] || change);
   }
+
   function agentTag(text = "Agent says") {
-    return h("div", { class: "agent-tag", html: icon("chat") + esc(text) });
+    return el("div", { class: "agent-tag", html: icon("chat") + escapeHTML(text) });
   }
-  function observedClass(v) {
-    const s = String(v).toLowerCase();
-    if (/(^|\b)(pass|passed|ok|green|success)/.test(s)) return "passed";
-    if (/(fail|failed|error|red)/.test(s)) return "failed";
+
+  // Colours an agent-reported test result by whether it reads as a pass or a failure.
+  function observedClass(value) {
+    const text = String(value).toLowerCase();
+
+    if (/(^|\b)(pass|passed|ok|green|success)/.test(text)) return "passed";
+    if (/(fail|failed|error|red)/.test(text)) return "failed";
+
     return "";
+  }
+
+  const observedMeta = (node) => node.meta && node.meta.find((meta) => meta.key === "observed");
+
+  function observedBadge(node) {
+    const observed = observedMeta(node);
+
+    if (!observed) return null;
+
+    return el("span", { class: "badge agent " + observedClass(observed.value) }, "agent says: " + observed.value);
   }
 
   // ── State & routing ────────────────────────────────────────
-  const SB_MIN = 220, SB_MAX = 600, SB_DEFAULT = 320, INS_MIN = 380, MAIN_MIN = 360;
-  function clampWidth(w) { return Math.max(SB_MIN, Math.min(SB_MAX, w || SB_DEFAULT)); }
-  function loadPref(k, def) { try { return localStorage.getItem(k) || def; } catch { return def; } }
-  function savePref(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  const SIDEBAR_MIN_WIDTH = 220;
+  const SIDEBAR_MAX_WIDTH = 600;
+  const SIDEBAR_DEFAULT_WIDTH = 320;
+  const INSPECTOR_MIN_WIDTH = 380;
+  const MAIN_MIN_WIDTH = 360;
+  // Larger graphs open with the legend folded so it does not cover nodes.
+  const LEGEND_FOLDED_ABOVE_NODES = 20;
+
+  function clampSidebarWidth(width) {
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width || SIDEBAR_DEFAULT_WIDTH));
+  }
+
+  // Preferences are a convenience: storage may be blocked, so fall back silently.
+  function loadPref(key, fallback) {
+    try {
+      return localStorage.getItem(key) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function savePref(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Storage unavailable: the preference lasts for this page only.
+    }
+  }
+
   const state = {
     view: "graph",
-    sel: null, // {type: node|edge|hunk|findings|file, id}
+    selection: null, // {type: node|edge|hunk|findings|file, id}
     showUnchanged: true,
     showTests: false,
     showDocs: false,
     direction: "RIGHT",
+    query: "",
     diffFilter: "all",
     commitFilter: "",
     claimFilter: "all",
     openFiles: new Set(),
     theme: loadPref("cv-theme", "auto"),
     sidebar: loadPref("cv-sidebar", "1") === "1",
-    sidebarWidth: clampWidth(+loadPref("cv-sidebar-w", "320")),
+    sidebarWidth: clampSidebarWidth(+loadPref("cv-sidebar-w", "320")),
     inspectorWidth: +loadPref("cv-inspector-w", "0") || 0, // 0: CSS default
     codeMode: loadPref("cv-code", "diff") === "after" ? "after" : "diff",
-    legend: loadPref("cv-legend", D.nodes.length > 20 ? "0" : "1") === "1",
+    legend: loadPref("cv-legend", reviewData.nodes.length > LEGEND_FOLDED_ABOVE_NODES ? "0" : "1") === "1",
   };
   const VIEWS = [
-    { id: "graph", label: "Graph", icon: "graph", count: () => D.nodes.length },
-    { id: "flows", label: "Flows", icon: "flows", count: () => D.flows.length },
-    { id: "diff", label: "Diff map", icon: "diff", count: () => D.files.length },
-    { id: "claims", label: "Claims", icon: "claims", count: () => D.claims.length },
+    { id: "graph", label: "Graph", icon: "graph", count: () => reviewData.nodes.length },
+    { id: "flows", label: "Flows", icon: "flows", count: () => reviewData.flows.length },
+    { id: "diff", label: "Diff map", icon: "diff", count: () => reviewData.files.length },
+    { id: "claims", label: "Claims", icon: "claims", count: () => reviewData.claims.length },
   ];
 
   function readHash() {
-    const p = new URLSearchParams(location.hash.slice(1));
-    const v = p.get("view");
-    if (VIEWS.some((x) => x.id === v)) state.view = v;
-    const sel = p.get("sel");
-    if (sel) {
-      const i = sel.indexOf(":");
-      state.sel = { type: sel.slice(0, i), id: sel.slice(i + 1) };
-    }
+    const params = new URLSearchParams(location.hash.slice(1));
+    const view = params.get("view");
+
+    if (VIEWS.some((candidate) => candidate.id === view)) state.view = view;
+
+    const selection = params.get("sel");
+
+    if (!selection) return;
+
+    const colon = selection.indexOf(":");
+
+    state.selection = { type: selection.slice(0, colon), id: selection.slice(colon + 1) };
   }
+
   function writeHash() {
-    const p = new URLSearchParams();
-    p.set("view", state.view);
-    if (state.sel && state.sel.type !== "findings") p.set("sel", `${state.sel.type}:${state.sel.id}`);
-    history.replaceState(null, "", "#" + p.toString());
+    const params = new URLSearchParams();
+
+    params.set("view", state.view);
+    if (state.selection && state.selection.type !== "findings") params.set("sel", `${state.selection.type}:${state.selection.id}`);
+    history.replaceState(null, "", "#" + params.toString());
   }
 
   function applyTheme() {
     const root = document.documentElement;
+
     if (state.theme === "auto") root.removeAttribute("data-theme");
     else root.setAttribute("data-theme", state.theme);
     savePref("cv-theme", state.theme);
@@ -185,72 +326,124 @@
 
   // ── Shell ──────────────────────────────────────────────────
   const app = document.getElementById("app");
-  let viewEl, inspectorEl, inspectorHandle, tabbarEl, toolbarEl, bodyEl, sidebarBtn;
+  let viewEl;
+  let inspectorEl;
+  let inspectorHandle;
+  let tabbarEl;
+  let toolbarEl;
+  let bodyEl;
+  let sidebarButton;
 
   function render() {
     applyTheme();
     app.innerHTML = "";
     app.appendChild(topbar());
+
     const banner = errorBanner();
+
     if (banner) app.appendChild(banner);
     else app.style.gridTemplateRows = "auto 1fr";
-    const body = h("div", { class: "body" + (state.sidebar ? "" : " no-sb") });
-    bodyEl = body;
-    body.style.setProperty("--sb-w", state.sidebarWidth + "px");
-    body.appendChild(sidebar());
-    body.appendChild(sidebarResizer());
-    const main = h("div", { class: "main" });
-    tabbarEl = h("div", { class: "tabbar" });
-    viewEl = h("div", { class: "view" });
+
+    bodyEl = el("div", { class: "body" + (state.sidebar ? "" : " no-sb") });
+    bodyEl.style.setProperty("--sb-w", state.sidebarWidth + "px");
+    bodyEl.appendChild(sidebar());
+    bodyEl.appendChild(sidebarResizer());
+
+    const main = el("div", { class: "main" });
+
+    tabbarEl = el("div", { class: "tabbar" });
+    viewEl = el("div", { class: "view" });
     main.append(tabbarEl, viewEl);
-    body.appendChild(main);
-    inspectorEl = h("aside", { class: "inspector" });
+    bodyEl.appendChild(main);
+
+    inspectorEl = el("aside", { class: "inspector" });
     inspectorHandle = inspectorResizer();
     applyInspectorWidth();
-    body.appendChild(inspectorEl);
-    app.appendChild(body);
+    bodyEl.appendChild(inspectorEl);
+    app.appendChild(bodyEl);
+
     renderTabs();
     renderView();
     renderInspector();
   }
 
+  const THEME_ICON = { auto: "monitor", light: "sun", dark: "moon" };
+  const NEXT_THEME = { auto: "light", light: "dark", dark: "auto" };
+
   function topbar() {
-    const c = D.counts;
-    const errCount = D.errors.length;
-    const warnCount = D.warnings.length;
-    const pill = (cls, ic, n, label, onclick, title) =>
-      h("button", { class: `pill ${cls}${n > 0 && (cls === "bad" || cls === "warn") ? " has" : ""}`, onclick, title, html: `${icon(ic, "sm")}<b>${n}</b><span>${esc(label)}</span>` });
-    const themeIcon = { auto: "monitor", light: "sun", dark: "moon" }[state.theme];
-    const repos = D.repos.map((r) => r.id).join(" · ");
-    return h("header", { class: "topbar" },
-      (sidebarBtn = h("button", { class: "icon-btn" + (state.sidebar ? " on" : ""), title: "Toggle side panel ( [ )", "aria-pressed": String(state.sidebar), html: icon("sidebar"), onclick: toggleSidebar })),
-      h("div", { class: "brand" }, h("span", { class: "brand-mark", html: icon("logo") }), "change-view"),
-      h("div", { class: "crumbs" },
-        h("span", { class: "sep" }, "/"),
-        h("span", { class: "path", title: D.reviewPath }, repos),
-        h("span", { class: "sep" }, "/"),
-        h("span", { class: "path", title: D.reviewPath }, D.reviewName)),
-      h("div", { class: "spacer" }),
-      h("div", { class: "pills" },
-        pill("ok", "checkcircle", c.verified, "verified", () => openFindings("all"), "References the tool resolved and checked"),
-        pill("bad", "xcircle", c.contradicted, "contradicted", () => openFindings("contradicted"), "References whose check failed"),
-        pill("warn", "help", c.unresolved, "unresolved", () => openFindings("unresolved"), "References that could not be found"),
-        pill("agent", "chat", c.agentStatements, "agent statements", null, "Content the tool cannot check: shown as the agent's word"),
-        h("span", { class: "tb-sep" }),
-        pill(errCount ? "bad" : "ok", errCount ? "xcircle" : "checkcircle", errCount, plural(errCount, "error").replace(/^\d+ /, ""), () => openFindings("errors"), "Errors in the review file"),
-        pill(warnCount ? "warn" : "ok", "alert", warnCount, plural(warnCount, "warning").replace(/^\d+ /, ""), () => openFindings("warnings"), "Diff-level findings and warnings")),
-      h("button", { class: "icon-btn", title: `Theme: ${state.theme}`, html: icon(themeIcon), onclick: () => {
-        state.theme = { auto: "light", light: "dark", dark: "auto" }[state.theme];
-        render();
-      } }));
+    const counts = reviewData.counts;
+    const errorCount = reviewData.errors.length;
+    const warningCount = reviewData.warnings.length;
+    const pill = (tone, iconName, count, label, onclick, title) => {
+      const isAlerting = count > 0 && (tone === "bad" || tone === "warn");
+
+      return el("button", {
+        class: `pill ${tone}${isAlerting ? " has" : ""}`,
+        onclick,
+        title,
+        html: `${icon(iconName, "sm")}<b>${count}</b><span>${escapeHTML(label)}</span>`,
+      });
+    };
+    const repoNames = reviewData.repos.map((repo) => repo.id).join(" · ");
+
+    sidebarButton = el("button", {
+      class: "icon-btn" + (state.sidebar ? " on" : ""),
+      title: "Toggle side panel ( [ )",
+      "aria-pressed": String(state.sidebar),
+      html: icon("sidebar"),
+      onclick: toggleSidebar,
+    });
+
+    return el("header", { class: "topbar" },
+      sidebarButton,
+      el("div", { class: "brand" }, el("span", { class: "brand-mark", html: icon("logo") }), "change-view"),
+      el("div", { class: "crumbs" },
+        el("span", { class: "sep" }, "/"),
+        el("span", { class: "path", title: reviewData.reviewPath }, repoNames),
+        el("span", { class: "sep" }, "/"),
+        el("span", { class: "path", title: reviewData.reviewPath }, reviewData.reviewName)),
+      el("div", { class: "spacer" }),
+      el("div", { class: "pills" },
+        pill("ok", "checkcircle", counts.verified, "verified", () => openFindings("all"), "References the tool resolved and checked"),
+        pill("bad", "xcircle", counts.contradicted, "contradicted", () => openFindings("contradicted"), "References whose check failed"),
+        pill("warn", "help", counts.unresolved, "unresolved", () => openFindings("unresolved"), "References that could not be found"),
+        pill("agent", "chat", counts.agentStatements, "agent statements", null, "Content the tool cannot check: shown as the agent's word"),
+        el("span", { class: "tb-sep" }),
+        pill(
+          errorCount ? "bad" : "ok",
+          errorCount ? "xcircle" : "checkcircle",
+          errorCount,
+          plural(errorCount, "error").replace(/^\d+ /, ""),
+          () => openFindings("errors"),
+          "Errors in the review file",
+        ),
+        pill(
+          warningCount ? "warn" : "ok",
+          "alert",
+          warningCount,
+          plural(warningCount, "warning").replace(/^\d+ /, ""),
+          () => openFindings("warnings"),
+          "Diff-level findings and warnings",
+        )),
+      el("button", {
+        class: "icon-btn",
+        title: `Theme: ${state.theme}`,
+        html: icon(THEME_ICON[state.theme]),
+        onclick: () => {
+          state.theme = NEXT_THEME[state.theme];
+          render();
+        },
+      }));
   }
 
   function errorBanner() {
-    if (D.exitCode === 0 || D.errors.length === 0) return null;
-    return h("div", { class: "banner", html: icon("alert") },
-      h("div", null, h("b", null, `This review file has ${plural(D.errors.length, "error")}.`),
+    if (reviewData.exitCode === 0 || reviewData.errors.length === 0) return null;
+
+    return el("div", { class: "banner", html: icon("alert") },
+      el("div", null,
+        el("b", null, `This review file has ${plural(reviewData.errors.length, "error")}.`),
         " The views show the account as written; elements marked contradicted or unresolved are not facts. Ask the agent to fix the file and validate again."),
-      h("button", { class: "link", onclick: () => openFindings("errors") }, "Show errors →"));
+      el("button", { class: "link", onclick: () => openFindings("errors") }, "Show errors →"));
   }
 
   // ── Sidebar ────────────────────────────────────────────────
@@ -258,160 +451,298 @@
     state.sidebar = !state.sidebar;
     savePref("cv-sidebar", state.sidebar ? "1" : "0");
     bodyEl.classList.toggle("no-sb", !state.sidebar);
-    sidebarBtn.classList.toggle("on", state.sidebar);
-    sidebarBtn.setAttribute("aria-pressed", String(state.sidebar));
+    sidebarButton.classList.toggle("on", state.sidebar);
+    sidebarButton.setAttribute("aria-pressed", String(state.sidebar));
   }
 
   // Drag handle on a panel edge; double-click resets the width. sign is 1
   // when dragging right widens the panel, -1 when dragging left does.
-  function dragHandle(cls, sign, getWidth, setWidth, onDone, onReset) {
-    const handle = h("div", { class: cls, role: "separator", "aria-orientation": "vertical", title: "Drag to resize, double-click to reset" });
-    handle.addEventListener("pointerdown", (ev) => {
-      ev.preventDefault();
-      handle.setPointerCapture(ev.pointerId);
-      const startX = ev.clientX, startW = getWidth();
+  function dragHandle(className, sign, getWidth, setWidth, onDone, onReset) {
+    const handle = el("div", {
+      class: className,
+      role: "separator",
+      "aria-orientation": "vertical",
+      title: "Drag to resize, double-click to reset",
+    });
+
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      handle.setPointerCapture(event.pointerId);
+
+      const startX = event.clientX;
+      const startWidth = getWidth();
+
       bodyEl.classList.add("resizing");
       handle.classList.add("dragging");
-      const move = (e) => setWidth(startW + sign * (e.clientX - startX));
-      const up = () => {
+
+      const move = (moveEvent) => setWidth(startWidth + sign * (moveEvent.clientX - startX));
+      const release = () => {
         handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", up);
-        handle.removeEventListener("pointercancel", up);
+        handle.removeEventListener("pointerup", release);
+        handle.removeEventListener("pointercancel", release);
         bodyEl.classList.remove("resizing");
         handle.classList.remove("dragging");
         onDone();
       };
+
       handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", up);
-      handle.addEventListener("pointercancel", up);
+      handle.addEventListener("pointerup", release);
+      handle.addEventListener("pointercancel", release);
     });
     handle.addEventListener("dblclick", onReset);
+
     return handle;
   }
 
   function sidebarResizer() {
-    const setWidth = (w) => {
-      state.sidebarWidth = clampWidth(w);
+    const setWidth = (width) => {
+      state.sidebarWidth = clampSidebarWidth(width);
       bodyEl.style.setProperty("--sb-w", state.sidebarWidth + "px");
     };
-    return dragHandle("sb-resizer", 1, () => state.sidebarWidth, setWidth,
-      () => savePref("cv-sidebar-w", String(state.sidebarWidth)),
-      () => { setWidth(SB_DEFAULT); savePref("cv-sidebar-w", String(SB_DEFAULT)); });
+    const reset = () => {
+      setWidth(SIDEBAR_DEFAULT_WIDTH);
+      savePref("cv-sidebar-w", String(SIDEBAR_DEFAULT_WIDTH));
+    };
+
+    return dragHandle("sb-resizer", 1, () => state.sidebarWidth, setWidth, () => savePref("cv-sidebar-w", String(state.sidebarWidth)), reset);
   }
 
   function sidebar() {
-    const sb = h("aside", { class: "sidebar" });
+    const panel = el("aside", { class: "sidebar" });
 
-    sb.appendChild(h("section", { class: "sb-section" },
-      h("h3", { class: "sb-title", html: icon("chat", "sm") + "Summary" }),
+    panel.appendChild(el("section", { class: "sb-section" },
+      el("h3", { class: "sb-title", html: icon("chat", "sm") + "Summary" }),
       summaryBlock()));
 
-    const repoSec = h("section", { class: "sb-section" }, h("h3", { class: "sb-title", html: icon("repo", "sm") + `Repositories<span class="count">${D.repos.length}</span>` }));
-    for (const r of D.repos) repoSec.appendChild(repoCard(r));
-    sb.appendChild(repoSec);
+    panel.appendChild(el("section", { class: "sb-section" },
+      el("h3", { class: "sb-title", html: icon("repo", "sm") + `Repositories<span class="count">${reviewData.repos.length}</span>` }),
+      reviewData.repos.map((repo) => repoCard(repo))));
 
-    sb.appendChild(findingsSection());
+    panel.appendChild(findingsSection());
 
-    if (D.notes.length) {
-      sb.appendChild(h("section", { class: "sb-section" },
-        h("h3", { class: "sb-title", html: icon("note", "sm") + `Agent notes<span class="count">${D.notes.length}</span>` }),
-        h("ul", { class: "notes" }, D.notes.map((n) => h("li", null, n)))));
+    if (reviewData.notes.length) {
+      panel.appendChild(el("section", { class: "sb-section" },
+        el("h3", { class: "sb-title", html: icon("note", "sm") + `Agent notes<span class="count">${reviewData.notes.length}</span>` }),
+        el("ul", { class: "notes" }, reviewData.notes.map((note) => el("li", null, note)))));
     }
-    sb.appendChild(h("section", { class: "sb-section muted", style: { fontSize: "11.5px" } },
-      `Generated ${new Date(D.generated).toLocaleString()} · change-view ${D.version}`));
-    return sb;
+
+    panel.appendChild(el("section", { class: "sb-section muted", style: { fontSize: "11.5px" } },
+      `Generated ${new Date(reviewData.generated).toLocaleString()} · change-view ${reviewData.version}`));
+
+    return panel;
   }
 
+  const SUMMARY_CLAMP_CHARS = 280;
+
   function summaryBlock() {
-    const text = h("p", { class: "summary-text clamp" }, D.summary);
-    const box = h("div", { class: "agent-says" }, agentTag(), text);
-    if (D.summary.length > 280) {
-      const more = h("button", { class: "link more", onclick: () => {
-        const open = text.classList.toggle("clamp");
-        more.textContent = open ? "Show more" : "Show less";
-      } }, "Show more");
-      box.appendChild(more);
-    } else text.classList.remove("clamp");
+    const text = el("p", { class: "summary-text clamp" }, reviewData.summary);
+    const box = el("div", { class: "agent-says" }, agentTag(), text);
+
+    if (reviewData.summary.length <= SUMMARY_CLAMP_CHARS) {
+      text.classList.remove("clamp");
+
+      return box;
+    }
+
+    const more = el("button", {
+      class: "link more",
+      onclick: () => {
+        const isClamped = text.classList.toggle("clamp");
+
+        more.textContent = isClamped ? "Show more" : "Show less";
+      },
+    }, "Show more");
+
+    box.appendChild(more);
+
     return box;
   }
 
-  function repoCard(r) {
-    const card = h("div", { class: "repo-card" });
-    card.appendChild(h("div", { class: "repo-head" },
-      h("span", { html: icon(r.role === "context" ? "eye" : "repo", "sm"), style: { color: "var(--text-3)" } }),
-      h("span", { class: "repo-name" }, r.id),
-      h("span", { class: r.role === "context" ? "badge context" : "badge role" }, r.role === "context" ? "context" : "changed"),
-      r.role !== "context" ? h("span", { class: "repo-stats" },
-        h("span", { class: "muted" }, plural(r.files, "file")),
-        h("span", { class: "plus" }, `+${r.added}`), h("span", { class: "minus" }, `−${r.removed}`)) : null));
-    card.appendChild(h("div", { class: "repo-path", title: r.abs }, r.path));
-    const list = h("div", { class: "commits" });
-    for (const c of r.commits) {
-      const multi = r.role !== "context" && r.commits.length > 1;
-      list.appendChild(h("div", { class: "commit" + (c.worktree ? " wt" : "") + (multi ? " clickable" : ""), onclick: multi ? () => {
-        state.commitFilter = `${r.id}@${c.sha}`;
-        state.diffFilter = "all";
-        D.files.filter((f) => f.repo === r.id).forEach((f) => state.openFiles.add(f.id));
-        if (state.view !== "diff") setView("diff"); else renderView();
-      } : null, title: c.worktree ? "Uncommitted work on disk" : `${c.sha}\n${c.subject}\n${c.author || ""} ${c.date ? "· " + new Date(c.date).toLocaleString() : ""}` },
-        h("span", { class: "dot" }), h("span", { class: "sha" }, c.worktree ? "worktree" : c.short), h("span", { class: "subj" }, c.subject || "")));
-    }
-    if (r.base) {
-      list.appendChild(h("div", { class: "commit base", title: `Initial state: ${r.base.sha}\n${r.base.subject || ""}` },
-        h("span", { class: "dot" }), h("span", { class: "sha" }, r.base.short), h("span", { class: "subj" }, `base · ${r.base.subject || ""}`)));
+  // Switches to the diff map, or re-renders it when it is already showing.
+  function showDiffMap() {
+    if (state.view !== "diff") setView("diff");
+    else renderView();
+  }
+
+  function filterDiffByCommit(repo, commit) {
+    state.commitFilter = `${repo.id}@${commit.sha}`;
+    state.diffFilter = "all";
+    reviewData.files.filter((file) => file.repo === repo.id).forEach((file) => state.openFiles.add(file.id));
+    showDiffMap();
+  }
+
+  // One commit of a repo card; filterable commits narrow the diff map on click.
+  function commitRow(repo, commit, isFilterable) {
+    const date = commit.date ? "· " + new Date(commit.date).toLocaleString() : "";
+    const title = commit.worktree
+      ? "Uncommitted work on disk"
+      : `${commit.sha}\n${commit.subject}\n${commit.author || ""} ${date}`;
+
+    return el("div", {
+      class: "commit" + (commit.worktree ? " wt" : "") + (isFilterable ? " clickable" : ""),
+      onclick: isFilterable ? () => filterDiffByCommit(repo, commit) : null,
+      title,
+    },
+    el("span", { class: "dot" }),
+    el("span", { class: "sha" }, commit.worktree ? "worktree" : commit.short),
+    el("span", { class: "subj" }, commit.subject || ""));
+  }
+
+  const UNCOMMITTED_PREVIEW_COUNT = 4;
+
+  function repoCard(repo) {
+    const isContext = repo.role === "context";
+    const card = el("div", { class: "repo-card" });
+
+    card.appendChild(el("div", { class: "repo-head" },
+      el("span", { html: icon(isContext ? "eye" : "repo", "sm"), style: { color: "var(--text-3)" } }),
+      el("span", { class: "repo-name" }, repo.id),
+      el("span", { class: isContext ? "badge context" : "badge role" }, isContext ? "context" : "changed"),
+      isContext ? null : el("span", { class: "repo-stats" },
+        el("span", { class: "muted" }, plural(repo.files, "file")),
+        el("span", { class: "plus" }, `+${repo.added}`),
+        el("span", { class: "minus" }, `−${repo.removed}`))));
+    card.appendChild(el("div", { class: "repo-path", title: repo.abs }, repo.path));
+
+    const isFilterable = !isContext && repo.commits.length > 1;
+    const list = el("div", { class: "commits" }, repo.commits.map((commit) => commitRow(repo, commit, isFilterable)));
+
+    if (repo.base) {
+      list.appendChild(el("div", { class: "commit base", title: `Initial state: ${repo.base.sha}\n${repo.base.subject || ""}` },
+        el("span", { class: "dot" }),
+        el("span", { class: "sha" }, repo.base.short),
+        el("span", { class: "subj" }, `base · ${repo.base.subject || ""}`)));
     }
     card.appendChild(list);
-    if (r.uncommitted && r.uncommitted.length) {
-      card.appendChild(h("div", { class: "callout warn", style: { margin: "0 8px 8px", padding: "7px 9px", fontSize: "11.5px" }, html: icon("alert", "sm") },
-        h("div", null, `${plural(r.uncommitted.length, "uncommitted path")} not part of the review: `, h("span", { class: "mono" }, r.uncommitted.slice(0, 4).join(", ") + (r.uncommitted.length > 4 ? " …" : "")))));
+
+    if (repo.uncommitted && repo.uncommitted.length) {
+      const preview = repo.uncommitted.slice(0, UNCOMMITTED_PREVIEW_COUNT).join(", ");
+      const more = repo.uncommitted.length > UNCOMMITTED_PREVIEW_COUNT ? " …" : "";
+
+      card.appendChild(el("div", {
+        class: "callout warn",
+        style: { margin: "0 8px 8px", padding: "7px 9px", fontSize: "11.5px" },
+        html: icon("alert", "sm"),
+      },
+      el("div", null,
+        `${plural(repo.uncommitted.length, "uncommitted path")} not part of the review: `,
+        el("span", { class: "mono" }, preview + more))));
     }
+
     return card;
   }
 
-  const GROUPS = [
-    { id: "contradicted", label: "Contradicted references", level: "err", icon: "xcircle", match: (f) => f.level === "error" && f.status === "contradicted" },
-    { id: "unresolved", label: "Unresolved references", level: "err", icon: "help", match: (f) => f.level === "error" && f.status === "unresolved" },
-    { id: "chain", label: "Other errors", level: "err", icon: "alert", match: (f) => f.level === "error" && !f.status },
-    { id: "unmentioned_hunk", label: "Unmentioned changes", level: "warn", icon: "diff", match: (f) => f.code === "unmentioned_hunk" },
-    { id: "unreferenced_test_hunk", label: "Unreferenced test code", level: "warn", icon: "test", match: (f) => f.code === "unreferenced_test_hunk" },
-    { id: "unlisted_repo", label: "Unlisted repos", level: "warn", icon: "repo", match: (f) => f.code === "unlisted_repo" },
-    { id: "uncommitted", label: "Work outside the review", level: "warn", icon: "branch", match: (f) => f.code === "uncommitted_changes" || f.code === "head_ahead" },
-    { id: "other", label: "Other warnings", level: "warn", icon: "alert", match: (f) => f.level === "warning" && !["unmentioned_hunk", "unreferenced_test_hunk", "unlisted_repo", "uncommitted_changes", "head_ahead"].includes(f.code) },
+  const GROUPED_WARNING_CODES = ["unmentioned_hunk", "unreferenced_test_hunk", "unlisted_repo", "uncommitted_changes", "head_ahead"];
+  const FINDING_GROUPS = [
+    {
+      id: "contradicted",
+      label: "Contradicted references",
+      level: "err",
+      icon: "xcircle",
+      match: (finding) => finding.level === "error" && finding.status === "contradicted",
+    },
+    {
+      id: "unresolved",
+      label: "Unresolved references",
+      level: "err",
+      icon: "help",
+      match: (finding) => finding.level === "error" && finding.status === "unresolved",
+    },
+    {
+      id: "chain",
+      label: "Other errors",
+      level: "err",
+      icon: "alert",
+      match: (finding) => finding.level === "error" && !finding.status,
+    },
+    {
+      id: "unmentioned_hunk",
+      label: "Unmentioned changes",
+      level: "warn",
+      icon: "diff",
+      match: (finding) => finding.code === "unmentioned_hunk",
+    },
+    {
+      id: "unreferenced_test_hunk",
+      label: "Unreferenced test code",
+      level: "warn",
+      icon: "test",
+      match: (finding) => finding.code === "unreferenced_test_hunk",
+    },
+    {
+      id: "unlisted_repo",
+      label: "Unlisted repos",
+      level: "warn",
+      icon: "repo",
+      match: (finding) => finding.code === "unlisted_repo",
+    },
+    {
+      id: "uncommitted",
+      label: "Work outside the review",
+      level: "warn",
+      icon: "branch",
+      match: (finding) => finding.code === "uncommitted_changes" || finding.code === "head_ahead",
+    },
+    {
+      id: "other",
+      label: "Other warnings",
+      level: "warn",
+      icon: "alert",
+      match: (finding) => finding.level === "warning" && !GROUPED_WARNING_CODES.includes(finding.code),
+    },
   ];
 
   function changedTests() {
-    return D.nodes.filter((n) => n.kind === "test" && n.change !== "unchanged" && n.result.status === "verified");
+    return reviewData.nodes.filter((node) => node.kind === "test" && node.change !== "unchanged" && node.result.status === "verified");
   }
 
   function findingsSection() {
-    const sec = h("section", { class: "sb-section" }, h("h3", { class: "sb-title", html: icon("alert", "sm") + `Findings<span class="count">${allFindings.length}</span>` }));
-    let any = false;
-    for (const g of GROUPS) {
-      const n = allFindings.filter(g.match).length;
-      if (!n) continue;
-      any = true;
-      sec.appendChild(h("button", { class: `finding-group ${g.level}`, onclick: () => openFindings(g.id), html: icon(g.icon) + `<span>${esc(g.label)}</span><span class="n">${n}</span>` }));
+    const section = el("section", { class: "sb-section" },
+      el("h3", { class: "sb-title", html: icon("alert", "sm") + `Findings<span class="count">${allFindings.length}</span>` }));
+    const groups = FINDING_GROUPS
+      .map((group) => ({ group, count: allFindings.filter(group.match).length }))
+      .filter(({ count }) => count);
+
+    groups.forEach(({ group, count }) => {
+      section.appendChild(el("button", {
+        class: `finding-group ${group.level}`,
+        onclick: () => openFindings(group.id),
+        html: icon(group.icon) + `<span>${escapeHTML(group.label)}</span><span class="n">${count}</span>`,
+      }));
+    });
+    if (!groups.length) section.appendChild(el("div", { class: "all-clear", html: icon("checkcircle") + "The account matches the diff" }));
+
+    const tests = changedTests();
+
+    if (tests.length) {
+      section.appendChild(el("button", {
+        class: "finding-group info",
+        onclick: () => openFindings("tests"),
+        html: icon("test") + `<span>Changed tests</span><span class="n">${tests.length}</span>`,
+      }));
     }
-    if (!any) sec.appendChild(h("div", { class: "all-clear", html: icon("checkcircle") + "The account matches the diff" }));
-    const ct = changedTests();
-    if (ct.length) {
-      sec.appendChild(h("button", { class: "finding-group info", onclick: () => openFindings("tests"), html: icon("test") + `<span>Changed tests</span><span class="n">${ct.length}</span>` }));
-    }
-    return sec;
+
+    return section;
   }
 
   // ── Tabs & toolbar ─────────────────────────────────────────
   function renderTabs() {
     tabbarEl.innerHTML = "";
-    VIEWS.forEach((v, i) => {
-      tabbarEl.appendChild(h("button", { class: "tab" + (state.view === v.id ? " on" : ""), title: `${v.label} (${i + 1})`, onclick: () => setView(v.id), html: `${icon(v.icon)}${esc(v.label)}<span class="n">${v.count()}</span>` }));
+    VIEWS.forEach((view, i) => {
+      tabbarEl.appendChild(el("button", {
+        class: "tab" + (state.view === view.id ? " on" : ""),
+        title: `${view.label} (${i + 1})`,
+        onclick: () => setView(view.id),
+        html: `${icon(view.icon)}${escapeHTML(view.label)}<span class="n">${view.count()}</span>`,
+      }));
     });
-    toolbarEl = h("div", { class: "toolbar" });
+    toolbarEl = el("div", { class: "toolbar" });
     tabbarEl.appendChild(toolbarEl);
   }
 
   function setView(id) {
     if (state.view === id) return;
+
     state.view = id;
     renderTabs();
     renderView();
@@ -423,255 +754,425 @@
     viewEl.innerHTML = "";
     viewEl.scrollTop = 0;
     toolbarEl.innerHTML = "";
-    ({ graph: graphView, flows: flowsView, diff: diffView, claims: claimsView })[state.view]();
+
+    const renderers = { graph: graphView, flows: flowsView, diff: diffView, claims: claimsView };
+
+    renderers[state.view]();
   }
 
-  function select(sel) {
-    state.sel = sel;
+  function select(selection) {
+    state.selection = selection;
     renderInspector();
-    if (state.view === "graph" && revealInGraph(sel)) renderView();
+    if (state.view === "graph" && revealInGraph(selection)) renderView();
     else highlightSelection();
     writeHash();
   }
 
+  const isGraphSelection = (selection) => selection && (selection.type === "node" || selection.type === "edge");
+
   // ── Graph view ─────────────────────────────────────────────
-  let cy = null;
+  let graph = null;
   let overlay = null;
   let tooltipEl = null;
 
-  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-
-  const measureCtx = document.createElement("canvas").getContext("2d");
-  function textWidth(t, font) { measureCtx.font = font; return measureCtx.measureText(t).width; }
-
-  function nodeSub(n) {
-    if (n.ref && n.ref.file) return `${n.ref.repo === n.ref.repo ? "" : ""}${basename(n.ref.file)}${linesText(n.ref)}`;
-    if (n.ref && n.ref.type === "commit") return `commit ${short(n.ref.sha)}`;
-    return n.kind;
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  function nodeSize(n) {
-    const lw = textWidth(n.label, "600 12.5px " + css("--font"));
-    const sw = textWidth(nodeSub(n), "10.5px " + css("--mono"));
-    const w = Math.max(150, Math.min(290, Math.max(lw, sw) + 74));
-    const testMeta = n.kind === "test" && n.meta && n.meta.some((m) => m.key === "observed");
-    return { w: Math.round(w), h: testMeta ? 66 : 52 };
+  const measureContext = document.createElement("canvas").getContext("2d");
+
+  function textWidth(text, font) {
+    measureContext.font = font;
+
+    return measureContext.measureText(text).width;
   }
+
+  function nodeSubtitle(node) {
+    if (node.ref && node.ref.file) return `${basename(node.ref.file)}${linesText(node.ref)}`;
+    if (node.ref && node.ref.type === "commit") return `commit ${shortSha(node.ref.sha)}`;
+
+    return node.kind;
+  }
+
+  // Wide enough for the longer of label and subtitle; an observed test result adds a line.
+  const NODE_BOX = { minWidth: 150, maxWidth: 290, padding: 74, height: 52, observedHeight: 66 };
+
+  function nodeSize(node) {
+    const labelWidth = textWidth(node.label, "600 12.5px " + cssVar("--font"));
+    const subWidth = textWidth(nodeSubtitle(node), "10.5px " + cssVar("--mono"));
+    const width = Math.max(NODE_BOX.minWidth, Math.min(NODE_BOX.maxWidth, Math.max(labelWidth, subWidth) + NODE_BOX.padding));
+    const hasObserved = node.kind === "test" && node.meta && node.meta.some((meta) => meta.key === "observed");
+
+    return { width: Math.round(width), height: hasObserved ? NODE_BOX.observedHeight : NODE_BOX.height };
+  }
+
+  // Many edges: fade them so the nodes stay readable.
+  const DENSE_GRAPH_EDGES = 40;
+  const DENSE_EDGE_OPACITY = 0.55;
 
   function graphStyle() {
-    const C = (n) => css(n);
-    const fill = { added: C("--added-fill"), modified: C("--modified-fill"), deleted: C("--deleted-fill"), unchanged: C("--unchanged-fill") };
+    const fill = {
+      added: cssVar("--added-fill"),
+      modified: cssVar("--modified-fill"),
+      deleted: cssVar("--deleted-fill"),
+      unchanged: cssVar("--unchanged-fill"),
+    };
+
     return [
-      { selector: "node", style: { shape: "round-rectangle", "corner-radius": 8, width: "data(w)", height: "data(h)", "background-color": (e) => fill[e.data("change")] || fill.unchanged,
-        "border-width": 1.5, "border-color": C("--text-3"), "border-style": "solid", label: "", "transition-property": "opacity", "transition-duration": "120ms" } },
+      {
+        selector: "node",
+        style: {
+          shape: "round-rectangle",
+          "corner-radius": 8,
+          width: "data(w)",
+          height: "data(h)",
+          "background-color": (graphNode) => fill[graphNode.data("change")] || fill.unchanged,
+          "border-width": 1.5,
+          "border-color": cssVar("--text-3"),
+          "border-style": "solid",
+          label: "",
+          "transition-property": "opacity",
+          "transition-duration": "120ms",
+        },
+      },
       { selector: "node.test", style: { "corner-radius": 26 } },
-      { selector: "node.verified", style: { "border-width": 1.5, "border-color": C("--text-2") } },
-      { selector: "node.contradicted", style: { "border-width": 2.5, "border-color": C("--bad") } },
-      { selector: "node.unresolved", style: { "border-width": 2, "border-color": C("--warn"), "border-style": "dashed" } },
-      { selector: "node.agent", style: { "border-width": 2, "border-color": C("--agent"), "border-style": "dotted" } },
-      { selector: "node.repo", style: { shape: "round-rectangle", "corner-radius": 14, "background-color": C("--panel"), "background-opacity": 0.65, "border-width": 1, "border-color": C("--repo-border"),
-        "border-style": "solid", padding: 30, "compound-sizing-wrt-labels": "exclude" } },
+      { selector: "node.verified", style: { "border-width": 1.5, "border-color": cssVar("--text-2") } },
+      { selector: "node.contradicted", style: { "border-width": 2.5, "border-color": cssVar("--bad") } },
+      { selector: "node.unresolved", style: { "border-width": 2, "border-color": cssVar("--warn"), "border-style": "dashed" } },
+      { selector: "node.agent", style: { "border-width": 2, "border-color": cssVar("--agent"), "border-style": "dotted" } },
+      {
+        selector: "node.repo",
+        style: {
+          shape: "round-rectangle",
+          "corner-radius": 14,
+          "background-color": cssVar("--panel"),
+          "background-opacity": 0.65,
+          "border-width": 1,
+          "border-color": cssVar("--repo-border"),
+          "border-style": "solid",
+          padding: 30,
+          "compound-sizing-wrt-labels": "exclude",
+        },
+      },
       { selector: "node.repo.context", style: { "border-style": "dashed", "background-opacity": 0.35 } },
-      { selector: "node:selected", style: { "underlay-color": C("--accent"), "underlay-padding": 5, "underlay-opacity": 0.22, "underlay-shape": "round-rectangle", "underlay-corner-radius": 11 } },
+      {
+        selector: "node:selected",
+        style: {
+          "underlay-color": cssVar("--accent"),
+          "underlay-padding": 5,
+          "underlay-opacity": 0.22,
+          "underlay-shape": "round-rectangle",
+          "underlay-corner-radius": 11,
+        },
+      },
       { selector: "node.repo:selected", style: { "underlay-opacity": 0 } },
-      { selector: "edge", style: { width: 1.6, "line-color": C("--text-3"), "target-arrow-color": C("--text-3"), "target-arrow-shape": "triangle", "arrow-scale": 0.9,
-        "curve-style": "bezier", "control-point-step-size": 40, label: "data(kind)", "font-size": 10, "font-family": C("--font"), color: C("--text-2"),
-        "text-background-color": C("--bg"), "text-background-opacity": 1, "text-background-padding": 3, "text-background-shape": "round-rectangle",
-        "text-border-width": 1, "text-border-color": C("--border"), "text-border-opacity": 1, "line-style": "dotted", "min-zoomed-font-size": 7,
-        "line-opacity": D.edges.length > 40 ? 0.55 : 1, "transition-property": "opacity", "transition-duration": "120ms" } },
-      { selector: "edge.verified", style: { "line-style": "solid", "line-color": C("--text-2"), "target-arrow-color": C("--text-2") } },
-      { selector: "edge.contradicted", style: { "line-style": "solid", width: 2.2, "line-color": C("--bad"), "target-arrow-color": C("--bad"), color: C("--bad") } },
-      { selector: "edge.unresolved", style: { "line-style": "dashed", "line-color": C("--warn"), "target-arrow-color": C("--warn"), color: C("--warn") } },
+      {
+        selector: "edge",
+        style: {
+          width: 1.6,
+          "line-color": cssVar("--text-3"),
+          "target-arrow-color": cssVar("--text-3"),
+          "target-arrow-shape": "triangle",
+          "arrow-scale": 0.9,
+          "curve-style": "bezier",
+          "control-point-step-size": 40,
+          label: "data(kind)",
+          "font-size": 10,
+          "font-family": cssVar("--font"),
+          color: cssVar("--text-2"),
+          "text-background-color": cssVar("--bg"),
+          "text-background-opacity": 1,
+          "text-background-padding": 3,
+          "text-background-shape": "round-rectangle",
+          "text-border-width": 1,
+          "text-border-color": cssVar("--border"),
+          "text-border-opacity": 1,
+          "line-style": "dotted",
+          "min-zoomed-font-size": 7,
+          "line-opacity": reviewData.edges.length > DENSE_GRAPH_EDGES ? DENSE_EDGE_OPACITY : 1,
+          "transition-property": "opacity",
+          "transition-duration": "120ms",
+        },
+      },
+      { selector: "edge.verified", style: { "line-style": "solid", "line-color": cssVar("--text-2"), "target-arrow-color": cssVar("--text-2") } },
+      {
+        selector: "edge.contradicted",
+        style: {
+          "line-style": "solid",
+          width: 2.2,
+          "line-color": cssVar("--bad"),
+          "target-arrow-color": cssVar("--bad"),
+          color: cssVar("--bad"),
+        },
+      },
+      {
+        selector: "edge.unresolved",
+        style: {
+          "line-style": "dashed",
+          "line-color": cssVar("--warn"),
+          "target-arrow-color": cssVar("--warn"),
+          color: cssVar("--warn"),
+        },
+      },
       { selector: "edge.tests", style: { "target-arrow-shape": "triangle-backcurve" } },
       { selector: "edge.focus", style: { "line-opacity": 1, "z-index": 10, "min-zoomed-font-size": 0 } },
-      { selector: "edge:selected", style: { width: 3, "line-color": C("--accent"), "target-arrow-color": C("--accent"), color: C("--accent-text") } },
+      {
+        selector: "edge:selected",
+        style: {
+          width: 3,
+          "line-color": cssVar("--accent"),
+          "target-arrow-color": cssVar("--accent"),
+          color: cssVar("--accent-text"),
+        },
+      },
       { selector: ".dim, .miss", style: { opacity: 0.22 } },
-      { selector: "node.hit", style: { "underlay-color": C("--warn"), "underlay-padding": 5, "underlay-opacity": 0.28, "underlay-shape": "round-rectangle" } },
+      {
+        selector: "node.hit",
+        style: {
+          "underlay-color": cssVar("--warn"),
+          "underlay-padding": 5,
+          "underlay-opacity": 0.28,
+          "underlay-shape": "round-rectangle",
+        },
+      },
     ];
   }
 
   // The graph opens on source code only; tests and docs sit behind toggles.
   const DOC_FILE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
-  function nodeGroup(n) {
-    if (n.kind === "test") return "test";
-    if (kindIcon(n.kind) === "doc" || (n.ref && n.ref.file && DOC_FILE.test(n.ref.file))) return "doc";
+
+  function nodeGroup(node) {
+    if (node.kind === "test") return "test";
+
+    const isDoc = kindIcon(node.kind) === "doc" || (node.ref && node.ref.file && DOC_FILE.test(node.ref.file));
+
+    if (isDoc) return "doc";
+
     return "source";
   }
-  function inGraph(n) {
-    const g = nodeGroup(n);
-    return (state.showUnchanged || n.change !== "unchanged") && (g !== "test" || state.showTests) && (g !== "doc" || state.showDocs);
+
+  function inGraph(node) {
+    const group = nodeGroup(node);
+    const changeShown = state.showUnchanged || node.change !== "unchanged";
+    const groupShown = (group !== "test" || state.showTests) && (group !== "doc" || state.showDocs);
+
+    return changeShown && groupShown;
   }
 
   // Turns on whichever filters hide the selection; true when one changed.
-  function revealInGraph(sel) {
-    if (!sel || (sel.type !== "node" && sel.type !== "edge")) return false;
-    const e = sel.type === "edge" ? edgeById.get(sel.id) : null;
-    const nodes = (e ? [e.from, e.to] : [sel.id]).map((id) => nodeById.get(id)).filter(Boolean);
-    let changed = false;
-    for (const n of nodes) {
-      if (inGraph(n)) continue;
-      const g = nodeGroup(n);
-      if (n.change === "unchanged") state.showUnchanged = true;
-      if (g === "test") state.showTests = true;
-      if (g === "doc") state.showDocs = true;
-      changed = true;
-    }
-    return changed;
+  function revealInGraph(selection) {
+    if (!isGraphSelection(selection)) return false;
+
+    const edge = selection.type === "edge" ? edgeById.get(selection.id) : null;
+    const hidden = (edge ? [edge.from, edge.to] : [selection.id])
+      .map((id) => nodeById.get(id))
+      .filter(Boolean)
+      .filter((node) => !inGraph(node));
+
+    hidden.forEach((node) => {
+      const group = nodeGroup(node);
+
+      if (node.change === "unchanged") state.showUnchanged = true;
+      if (group === "test") state.showTests = true;
+      if (group === "doc") state.showDocs = true;
+    });
+
+    return hidden.length > 0;
   }
 
   function graphElements() {
-    const visible = D.nodes.filter(inGraph);
-    const ids = new Set(visible.map((n) => n.id));
-    const els = [];
-    const reposUsed = new Set();
+    const visible = reviewData.nodes.filter(inGraph);
+    const visibleIds = new Set(visible.map((node) => node.id));
     // One repo: the header already names it, so skip the box.
-    const boxed = new Set(D.nodes.filter((n) => n.ref && repoById.get(n.ref.repo)).map((n) => n.ref.repo)).size > 1;
-    for (const n of visible) {
-      const repo = boxed && n.ref && repoById.get(n.ref.repo) ? n.ref.repo : null;
-      if (repo) reposUsed.add(repo);
-      const sz = nodeSize(n);
-      els.push({ group: "nodes", data: { id: n.id, change: n.change, w: sz.w, h: sz.h, parent: repo ? "repo:" + repo : undefined },
-        classes: [n.result.status, n.kind === "test" ? "test" : "", "change-" + n.change].join(" ") });
-    }
-    for (const r of D.repos) {
-      if (!reposUsed.has(r.id)) continue;
-      els.push({ group: "nodes", data: { id: "repo:" + r.id, repo: r.id }, classes: "repo" + (r.role === "context" ? " context" : "") });
-    }
-    for (const e of D.edges) {
-      if (!ids.has(e.from) || !ids.has(e.to)) continue;
-      els.push({ group: "edges", data: { id: e.id, source: e.from, target: e.to, kind: e.kind }, classes: [e.result.status, e.kind === "tests" ? "tests" : ""].join(" ") });
-    }
-    return els;
+    const listedRepos = new Set(reviewData.nodes.filter((node) => node.ref && repoById.get(node.ref.repo)).map((node) => node.ref.repo));
+    const boxRepos = listedRepos.size > 1;
+    const parentRepo = (node) => (boxRepos && node.ref && repoById.get(node.ref.repo) ? node.ref.repo : null);
+    const usedRepos = new Set(visible.map(parentRepo).filter(Boolean));
+    const nodeElements = visible.map((node) => {
+      const repo = parentRepo(node);
+      const size = nodeSize(node);
+
+      return {
+        group: "nodes",
+        data: { id: node.id, change: node.change, w: size.width, h: size.height, parent: repo ? "repo:" + repo : undefined },
+        classes: [node.result.status, node.kind === "test" ? "test" : "", "change-" + node.change].join(" "),
+      };
+    });
+    const repoElements = reviewData.repos
+      .filter((repo) => usedRepos.has(repo.id))
+      .map((repo) => ({
+        group: "nodes",
+        data: { id: "repo:" + repo.id, repo: repo.id },
+        classes: "repo" + (repo.role === "context" ? " context" : ""),
+      }));
+    const edgeElements = reviewData.edges
+      .filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to))
+      .map((edge) => ({
+        group: "edges",
+        data: { id: edge.id, source: edge.from, target: edge.to, kind: edge.kind },
+        classes: [edge.result.status, edge.kind === "tests" ? "tests" : ""].join(" "),
+      }));
+
+    return [...nodeElements, ...repoElements, ...edgeElements];
   }
 
-  function graphView() {
-    const seg = h("div", { class: "seg" },
-      h("button", { class: state.direction === "RIGHT" ? "on" : "", onclick: () => { state.direction = "RIGHT"; renderView(); }, title: "Left to right" }, "→"),
-      h("button", { class: state.direction === "DOWN" ? "on" : "", onclick: () => { state.direction = "DOWN"; renderView(); }, title: "Top to bottom" }, "↓"));
-    const unchangedCount = D.nodes.filter((n) => n.change === "unchanged").length;
-    const testCount = D.nodes.filter((n) => nodeGroup(n) === "test").length;
-    const docCount = D.nodes.filter((n) => nodeGroup(n) === "doc").length;
-    const toggle = (key, label, count, title) => h("label", { class: "toggle", title },
-      h("input", { type: "checkbox", checked: state[key], onchange: (ev) => { state[key] = ev.target.checked; renderView(); } }),
-      h("span", { class: "sw" }), `${label} (${count})`);
-    const search = h("input", { class: "search", type: "search", placeholder: "Find node…  /", value: state.query || "",
-      oninput: (ev) => { state.query = ev.target.value; applySearch(); },
-      onkeydown: (ev) => {
-        if (ev.key === "Enter" && cy) {
-          const hit = cy.nodes(".hit").first();
-          if (hit.length) { select({ type: "node", id: hit.id() }); cy.animate({ center: { eles: hit }, zoom: Math.max(cy.zoom(), 0.9) }, { duration: 220 }); }
+  const GRAPH_CAMERA = {
+    padding: 48,
+    zoomIn: 1.25,
+    zoomOut: 0.8,
+    searchHitZoom: 0.9,
+    maxStartZoom: 1.15,
+    minReadableZoom: 0.5,
+    largeGraphZoom: 0.62,
+  };
+  const ANIMATION_MS = { pan: 220, zoom: 160, keepInView: 200 };
+
+  function focusFirstSearchHit() {
+    const hit = graph.nodes(".hit").first();
+
+    if (!hit.length) return;
+
+    select({ type: "node", id: hit.id() });
+    graph.animate({ center: { eles: hit }, zoom: Math.max(graph.zoom(), GRAPH_CAMERA.searchHitZoom) }, { duration: ANIMATION_MS.pan });
+  }
+
+  function graphToolbar() {
+    const directionButton = (direction, label, title) => el("button", {
+      class: state.direction === direction ? "on" : "",
+      onclick: () => {
+        state.direction = direction;
+        renderView();
+      },
+      title,
+    }, label);
+    const directionToggle = el("div", { class: "seg" },
+      directionButton("RIGHT", "→", "Left to right"),
+      directionButton("DOWN", "↓", "Top to bottom"));
+    const unchangedCount = reviewData.nodes.filter((node) => node.change === "unchanged").length;
+    const testCount = reviewData.nodes.filter((node) => nodeGroup(node) === "test").length;
+    const docCount = reviewData.nodes.filter((node) => nodeGroup(node) === "doc").length;
+    const toggle = (key, label, count, title) => el("label", { class: "toggle", title },
+      el("input", {
+        type: "checkbox",
+        checked: state[key],
+        onchange: (event) => {
+          state[key] = event.target.checked;
+          renderView();
+        },
+      }),
+      el("span", { class: "sw" }),
+      `${label} (${count})`);
+    const search = el("input", {
+      class: "search",
+      type: "search",
+      placeholder: "Find node…  /",
+      value: state.query || "",
+      oninput: (event) => {
+        state.query = event.target.value;
+        applySearch();
+      },
+      onkeydown: (event) => {
+        if (event.key === "Enter" && graph) focusFirstSearchHit();
+        if (event.key === "Escape") {
+          search.value = "";
+          state.query = "";
+          applySearch();
+          search.blur();
         }
-        if (ev.key === "Escape") { ev.target.value = ""; state.query = ""; applySearch(); ev.target.blur(); }
-      } });
+      },
+    });
+
     toolbarEl.append(
       search,
-      h("span", { class: "tb-sep" }),
+      el("span", { class: "tb-sep" }),
       toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
       testCount ? toggle("showTests", "Tests", testCount, "Show test nodes") : null,
       docCount ? toggle("showDocs", "Docs", docCount, "Show documentation nodes") : null,
-      h("span", { class: "tb-sep" }), seg);
+      el("span", { class: "tb-sep" }),
+      directionToggle);
+  }
 
-    if (typeof cytoscape === "undefined") {
-      viewEl.appendChild(h("div", { class: "empty" }, "Graph renderer failed to load."));
-      return;
+  function graphControls() {
+    return el("div", { class: "graph-controls" },
+      el("button", { class: "icon-btn", title: "Zoom in", html: icon("plus"), onclick: () => zoomBy(GRAPH_CAMERA.zoomIn) }),
+      el("button", { class: "icon-btn", title: "Zoom out", html: icon("minus"), onclick: () => zoomBy(GRAPH_CAMERA.zoomOut) }),
+      el("button", {
+        class: "icon-btn",
+        title: "Fit to screen",
+        html: icon("fit"),
+        onclick: () => graph && graph.animate({ fit: { padding: GRAPH_CAMERA.padding } }, { duration: ANIMATION_MS.pan }),
+      }));
+  }
+
+  function repoTag(repo) {
+    const isContext = repo.role === "context";
+    const role = isContext ? "context · read only" : escapeHTML(repo.worktree ? "worktree" : shortSha(repo.commits[0]?.sha));
+
+    return el("div", { class: "gl", html: icon(isContext ? "eye" : "repo", "sm") + `<span>${escapeHTML(repo.id)}</span><span class="role">${role}</span>` });
+  }
+
+  // Icon, label, subtitle and problem marker shared by graph overlay cards and flow cards.
+  function nodeCardBody(node, statusIconClass) {
+    const observed = observedMeta(node);
+    const status = node.result.status;
+
+    return [
+      el("div", { class: "ic", html: icon(kindIcon(node.kind)) }),
+      el("div", { class: "tx" },
+        el("div", { class: "lb" }, node.label),
+        el("div", { class: "sb" }, `${node.kind} · ${nodeSubtitle(node)}`),
+        observed ? el("span", { class: "says " + observedClass(observed.value) }, `agent says: ${observed.value}`) : null),
+      isProblemStatus(status) ? el("div", { class: `st ${status}`, html: icon(STATUS_ICON[status], statusIconClass) }) : null,
+    ];
+  }
+
+  // The HTML drawn over a graph node: a node card, or the name tag of a repo box.
+  function overlayLabel(graphNode) {
+    if (graphNode.hasClass("repo")) return repoTag(repoById.get(graphNode.data("repo")));
+
+    const node = nodeById.get(graphNode.id());
+
+    return el("div", {
+      class: `gn ${node.change} ${node.result.status}`,
+      style: { width: graphNode.data("w") + "px", height: graphNode.data("h") + "px" },
+    }, nodeCardBody(node, ""));
+  }
+
+  const REPO_TAG_OFFSET = { x: 14, y: 7 };
+
+  // Top-left corner, in graph coordinates, of a graph node's overlay label.
+  function labelPosition(graphNode) {
+    if (graphNode.hasClass("repo")) {
+      const box = graphNode.boundingBox({ includeLabels: false, includeOverlays: false, includeUnderlays: false });
+
+      return { left: box.x1 + REPO_TAG_OFFSET.x, top: box.y1 + REPO_TAG_OFFSET.y };
     }
-    const wrap = h("div", { class: "graph-wrap" });
-    const cyEl = h("div", { class: "cy" });
-    overlay = h("div", { class: "cy-overlay" });
-    const layer = h("div", { class: "cy-layer" });
-    overlay.appendChild(layer);
-    wrap.append(cyEl, overlay);
-    wrap.appendChild(h("div", { class: "graph-controls" },
-      h("button", { class: "icon-btn", title: "Zoom in", html: icon("plus"), onclick: () => zoomBy(1.25) }),
-      h("button", { class: "icon-btn", title: "Zoom out", html: icon("minus"), onclick: () => zoomBy(0.8) }),
-      h("button", { class: "icon-btn", title: "Fit to screen", html: icon("fit"), onclick: () => cy && cy.animate({ fit: { padding: 48 } }, { duration: 220 }) })));
-    wrap.appendChild(legend());
-    viewEl.appendChild(wrap);
 
-    if (typeof cytoscapeElk !== "undefined" && !cytoscape.__elk) { cytoscape.use(cytoscapeElk); cytoscape.__elk = true; }
+    const position = graphNode.position();
 
-    cy = cytoscape({
-      container: cyEl, elements: graphElements(), style: graphStyle(), wheelSensitivity: 0.25, minZoom: 0.15, maxZoom: 2.5,
-      boxSelectionEnabled: false, autoungrabify: false,
-    });
+    return { left: position.x - graphNode.data("w") / 2, top: position.y - graphNode.data("h") / 2 };
+  }
 
-    // HTML overlay for rich node content.
-    const nodeEls = new Map();
-    cy.nodes().forEach((ele) => {
-      if (ele.hasClass("repo")) {
-        const r = repoById.get(ele.data("repo"));
-        const el = h("div", { class: "gl", html: icon(r.role === "context" ? "eye" : "repo", "sm") + `<span>${esc(r.id)}</span><span class="role">${r.role === "context" ? "context · read only" : esc(r.worktree ? "worktree" : short(r.commits[0]?.sha))}</span>` });
-        layer.appendChild(el);
-        nodeEls.set(ele.id(), el);
-        return;
-      }
-      const n = nodeById.get(ele.id());
-      const observed = n.meta && n.meta.find((m) => m.key === "observed");
-      const el = h("div", { class: `gn ${n.change} ${n.result.status}`, style: { width: ele.data("w") + "px", height: ele.data("h") + "px" } },
-        h("div", { class: "ic", html: icon(kindIcon(n.kind)) }),
-        h("div", { class: "tx" },
-          h("div", { class: "lb" }, n.label),
-          h("div", { class: "sb" }, `${n.kind} · ${nodeSub(n)}`),
-          observed ? h("span", { class: "says " + observedClass(observed.value) }, `agent says: ${observed.value}`) : null),
-        n.result.status === "contradicted" || n.result.status === "unresolved" ? h("div", { class: `st ${n.result.status}`, html: icon(STATUS_ICON[n.result.status]) }) : null);
-      layer.appendChild(el);
-      nodeEls.set(ele.id(), el);
-    });
+  const SELECTION_EDGE_MARGIN = 20;
 
-    let raf = 0;
-    const sync = () => {
-      raf = 0;
-      const pan = cy.pan(), zoom = cy.zoom();
-      layer.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
-      cy.nodes().forEach((ele) => {
-        const el = nodeEls.get(ele.id());
-        if (!el) return;
-        if (ele.hasClass("repo")) {
-          const bb = ele.boundingBox({ includeLabels: false, includeOverlays: false, includeUnderlays: false });
-          el.style.left = bb.x1 + 14 + "px";
-          el.style.top = bb.y1 + 7 + "px";
-        } else {
-          const p = ele.position();
-          el.style.left = p.x - ele.data("w") / 2 + "px";
-          el.style.top = p.y - ele.data("h") / 2 + "px";
-        }
-        el.classList.toggle("dim", ele.hasClass("dim") || ele.hasClass("miss"));
-      });
-    };
-    const schedule = () => { if (!raf) raf = requestAnimationFrame(sync); };
-    cy.on("render viewport position", schedule);
-    overlay.__sync = schedule;
-    const ro = new ResizeObserver(() => {
-      if (!cy) return;
-      cy.resize();
-      schedule();
-      // Keep the selection in view when the inspector opens.
-      const sel = cy.$(":selected");
-      if (sel.length) {
-        const bb = sel.renderedBoundingBox(), w = cy.width(), hh = cy.height();
-        if (bb.x2 > w - 20 || bb.x1 < 20 || bb.y1 < 20 || bb.y2 > hh - 20) cy.animate({ center: { eles: sel } }, { duration: 200 });
-      }
-    });
-    ro.observe(cyEl);
-    cy.on("destroy", () => ro.disconnect());
+  // Keep the selection in view when the inspector opens.
+  function keepSelectionInView() {
+    const selected = graph.$(":selected");
 
-    cy.on("tap", "node", (ev) => {
-      const id = ev.target.id();
-      if (id.startsWith("repo:")) return;
-      select({ type: "node", id });
-    });
-    cy.on("tap", "edge", (ev) => select({ type: "edge", id: ev.target.id() }));
-    cy.on("tap", (ev) => { if (ev.target === cy) select(null); });
+    if (!selected.length) return;
 
-    cy.on("mouseover", "node, edge", (ev) => {
-      const t = ev.target;
-      if (t.isNode() && t.hasClass("repo")) return;
-      showTooltip(ev.originalEvent, t.isNode() ? nodeTooltip(nodeById.get(t.id())) : edgeTooltip(edgeById.get(t.id())));
-      cyEl.style.cursor = "pointer";
-    });
-    cy.on("mousemove", "node, edge", (ev) => moveTooltip(ev.originalEvent));
-    cy.on("mouseout", "node, edge", () => { hideTooltip(); cyEl.style.cursor = ""; });
+    const box = selected.renderedBoundingBox();
+    const width = graph.width();
+    const height = graph.height();
+    const isNearEdge = box.x2 > width - SELECTION_EDGE_MARGIN
+      || box.x1 < SELECTION_EDGE_MARGIN
+      || box.y1 < SELECTION_EDGE_MARGIN
+      || box.y2 > height - SELECTION_EDGE_MARGIN;
 
+    if (isNearEdge) graph.animate({ center: { eles: selected } }, { duration: ANIMATION_MS.keepInView });
+  }
+
+  function graphLayoutOptions() {
     // Spacing must be set on every compound too: ELK reads it per graph level.
     const spacing = {
       "elk.direction": state.direction,
@@ -684,522 +1185,966 @@
       "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
       "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
     };
-    const layout = cy.layout({
+
+    return {
       name: typeof cytoscapeElk !== "undefined" ? "elk" : "breadthfirst",
-      fit: true, padding: 48, animate: false, nodeDimensionsIncludeLabels: false,
-      nodeLayoutOptions: (node) => (node.isParent() ? spacing : {}),
-      elk: Object.assign({ algorithm: "layered", "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-        "elk.layered.compaction.postCompaction.strategy": "EDGE_LENGTH" }, spacing),
+      fit: true,
+      padding: GRAPH_CAMERA.padding,
+      animate: false,
+      nodeDimensionsIncludeLabels: false,
+      nodeLayoutOptions: (layoutNode) => (layoutNode.isParent() ? spacing : {}),
+      elk: {
+        algorithm: "layered",
+        "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+        "elk.layered.compaction.postCompaction.strategy": "EDGE_LENGTH",
+        ...spacing,
+      },
+    };
+  }
+
+  // The zoom the graph opens at once the layout has fitted it.
+  function startViewport() {
+    if (graph.zoom() > GRAPH_CAMERA.maxStartZoom) {
+      graph.zoom(GRAPH_CAMERA.maxStartZoom);
+      graph.center();
+    }
+    // Large graphs: start readable at the first flow's entry, not as a speck.
+    if (graph.zoom() < GRAPH_CAMERA.minReadableZoom) {
+      const first = reviewData.flows.length && graph.getElementById(reviewData.flows[0].path[0]);
+      const anchor = first && first.length ? first : graph.nodes().not(".repo").first();
+
+      graph.zoom(GRAPH_CAMERA.largeGraphZoom);
+      graph.center(anchor);
+    }
+  }
+
+  function graphView() {
+    graphToolbar();
+
+    if (typeof cytoscape === "undefined") {
+      viewEl.appendChild(el("div", { class: "empty" }, "Graph renderer failed to load."));
+
+      return;
+    }
+
+    const wrap = el("div", { class: "graph-wrap" });
+    const container = el("div", { class: "cy" });
+    const layer = el("div", { class: "cy-layer" });
+
+    overlay = el("div", { class: "cy-overlay" });
+    overlay.appendChild(layer);
+    wrap.append(container, overlay);
+    wrap.appendChild(graphControls());
+    wrap.appendChild(legend());
+    viewEl.appendChild(wrap);
+
+    if (typeof cytoscapeElk !== "undefined" && !cytoscape.__elk) {
+      cytoscape.use(cytoscapeElk);
+      cytoscape.__elk = true;
+    }
+
+    graph = cytoscape({
+      container,
+      elements: graphElements(),
+      style: graphStyle(),
+      wheelSensitivity: 0.25,
+      minZoom: 0.15,
+      maxZoom: 2.5,
+      boxSelectionEnabled: false,
+      autoungrabify: false,
     });
+
+    // HTML overlay for rich node content.
+    const labels = new Map();
+
+    graph.nodes().forEach((graphNode) => {
+      const label = overlayLabel(graphNode);
+
+      layer.appendChild(label);
+      labels.set(graphNode.id(), label);
+    });
+
+    let frameRequest = 0;
+    const syncOverlay = () => {
+      frameRequest = 0;
+
+      const pan = graph.pan();
+      const zoom = graph.zoom();
+
+      layer.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+      graph.nodes().forEach((graphNode) => {
+        const label = labels.get(graphNode.id());
+
+        if (!label) return;
+
+        const position = labelPosition(graphNode);
+
+        label.style.left = position.left + "px";
+        label.style.top = position.top + "px";
+        label.classList.toggle("dim", graphNode.hasClass("dim") || graphNode.hasClass("miss"));
+      });
+    };
+    const scheduleSync = () => {
+      if (!frameRequest) frameRequest = requestAnimationFrame(syncOverlay);
+    };
+
+    graph.on("render viewport position", scheduleSync);
+    overlay.__sync = scheduleSync;
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (!graph) return;
+
+      graph.resize();
+      scheduleSync();
+      keepSelectionInView();
+    });
+
+    resizeObserver.observe(container);
+    graph.on("destroy", () => resizeObserver.disconnect());
+
+    graph.on("tap", "node", (event) => {
+      const id = event.target.id();
+
+      if (id.startsWith("repo:")) return;
+
+      select({ type: "node", id });
+    });
+    graph.on("tap", "edge", (event) => select({ type: "edge", id: event.target.id() }));
+    graph.on("tap", (event) => {
+      if (event.target === graph) select(null);
+    });
+
+    graph.on("mouseover", "node, edge", (event) => {
+      const target = event.target;
+
+      if (target.isNode() && target.hasClass("repo")) return;
+
+      showTooltip(event.originalEvent, target.isNode() ? nodeTooltip(nodeById.get(target.id())) : edgeTooltip(edgeById.get(target.id())));
+      container.style.cursor = "pointer";
+    });
+    graph.on("mousemove", "node, edge", (event) => moveTooltip(event.originalEvent));
+    graph.on("mouseout", "node, edge", () => {
+      hideTooltip();
+      container.style.cursor = "";
+    });
+
+    const layout = graph.layout(graphLayoutOptions());
+
     layout.on("layoutstop", () => {
-      if (cy.zoom() > 1.15) { cy.zoom(1.15); cy.center(); }
-      // Large graphs: start readable at the first flow's entry, not as a speck.
-      if (cy.zoom() < 0.5) {
-        const first = D.flows.length && cy.getElementById(D.flows[0].path[0]);
-        const anchor = first && first.length ? first : cy.nodes().not(".repo").first();
-        cy.zoom(0.62);
-        cy.center(anchor);
-      }
+      startViewport();
       highlightSelection();
       applySearch();
-      schedule();
+      scheduleSync();
     });
     layout.run();
   }
 
-  function applySearch() {
-    if (!cy) return;
-    const q = (state.query || "").trim().toLowerCase();
-    cy.batch(() => {
-      cy.nodes().removeClass("hit miss");
-      if (!q) return;
-      cy.nodes().not(".repo").forEach((ele) => {
-        const n = nodeById.get(ele.id());
-        const text = `${n.label} ${n.id} ${n.kind} ${n.ref && n.ref.file ? n.ref.file : ""}`.toLowerCase();
-        ele.addClass(text.includes(q) ? "hit" : "miss");
-      });
-    });
-    overlay && overlay.__sync && overlay.__sync();
+  // The overlay of the last graph view registers its sync; it outlives the graph.
+  function requestOverlaySync() {
+    if (overlay && overlay.__sync) overlay.__sync();
   }
 
-  function zoomBy(f) {
-    if (!cy) return;
-    const z = cy.zoom() * f;
-    cy.animate({ zoom: { level: z, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } } }, { duration: 160 });
+  function applySearch() {
+    if (!graph) return;
+
+    const query = (state.query || "").trim().toLowerCase();
+
+    graph.batch(() => {
+      graph.nodes().removeClass("hit miss");
+      if (!query) return;
+
+      graph.nodes().not(".repo").forEach((graphNode) => {
+        const node = nodeById.get(graphNode.id());
+        const text = `${node.label} ${node.id} ${node.kind} ${node.ref && node.ref.file ? node.ref.file : ""}`.toLowerCase();
+
+        graphNode.addClass(text.includes(query) ? "hit" : "miss");
+      });
+    });
+    requestOverlaySync();
+  }
+
+  function zoomBy(factor) {
+    if (!graph) return;
+
+    const level = graph.zoom() * factor;
+
+    graph.animate({ zoom: { level, renderedPosition: { x: graph.width() / 2, y: graph.height() / 2 } } }, { duration: ANIMATION_MS.zoom });
   }
 
   function destroyGraph() {
-    if (cy) { cy.destroy(); cy = null; }
+    if (graph) {
+      graph.destroy();
+      graph = null;
+    }
     hideTooltip();
   }
 
+  // Selects the element and dims everything outside its neighbourhood.
+  function highlightGraphSelection() {
+    graph.elements().unselect().removeClass("dim focus");
+
+    const selection = state.selection;
+
+    if (!isGraphSelection(selection)) return;
+
+    const element = graph.getElementById(selection.id);
+
+    if (!element || !element.length) return;
+
+    element.select();
+
+    const kept = selection.type === "node" ? element.closedNeighborhood() : element.union(element.connectedNodes());
+
+    kept.edges().addClass("focus");
+
+    const parents = kept.nodes().parents();
+
+    graph.elements().not(kept).not(parents).addClass("dim");
+  }
+
   function highlightSelection() {
-    if (cy) {
-      cy.batch(() => {
-        cy.elements().unselect().removeClass("dim focus");
-        const sel = state.sel;
-        if (sel && (sel.type === "node" || sel.type === "edge")) {
-          const ele = cy.getElementById(sel.id);
-          if (ele && ele.length) {
-            ele.select();
-            const keep = sel.type === "node" ? ele.closedNeighborhood() : ele.union(ele.connectedNodes());
-            keep.edges().addClass("focus");
-            const parents = keep.nodes().parents();
-            cy.elements().not(keep).not(parents).addClass("dim");
-          }
-        }
-      });
-      overlay && overlay.__sync && overlay.__sync();
+    if (graph) {
+      graph.batch(highlightGraphSelection);
+      requestOverlaySync();
     }
-    document.querySelectorAll(".ncard").forEach((el) => el.classList.toggle("sel", !!(state.sel && state.sel.type === "node" && el.dataset.node === state.sel.id)));
+
+    const selection = state.selection;
+    const isNodeSelection = selection && selection.type === "node";
+
+    document.querySelectorAll(".ncard").forEach((card) => card.classList.toggle("sel", Boolean(isNodeSelection && card.dataset.node === selection.id)));
   }
 
   function legend() {
-    const sw = (style) => h("span", { class: "sw", style });
-    const ln = (style) => h("span", { class: "ln", style });
+    const swatch = (style) => el("span", { class: "sw", style });
+    const lineSample = (style) => el("span", { class: "ln", style });
+    const setLegendShown = (isShown) => {
+      state.legend = isShown;
+      savePref("cv-legend", isShown ? "1" : "0");
+      renderView();
+    };
+
     if (!state.legend) {
-      return h("button", { class: "legend-btn", onclick: () => { state.legend = true; savePref("cv-legend", "1"); renderView(); }, html: icon("info", "sm") + "Legend" });
+      return el("button", { class: "legend-btn", onclick: () => setLegendShown(true), html: icon("info", "sm") + "Legend" });
     }
-    return h("div", { class: "legend" },
-      h("button", { class: "icon-btn legend-x", title: "Hide legend", html: icon("close", "sm"), onclick: () => { state.legend = false; savePref("cv-legend", "0"); renderView(); } }),
-      h("h6", null, "Reference status"),
-      h("div", { class: "lg" }, sw({ border: "1.5px solid var(--text-2)" }), "Verified"),
-      h("div", { class: "lg" }, sw({ border: "2.5px solid var(--bad)" }), "Contradicted"),
-      h("div", { class: "lg" }, sw({ border: "2px dashed var(--warn)" }), "Unresolved"),
-      h("div", { class: "lg" }, sw({ border: "2px dotted var(--agent)" }), h("i", null, "Agent statement")),
-      h("h6", null, "Change"),
-      h("div", { class: "lg" }, sw({ background: "var(--added-fill)", border: "1px solid var(--added)" }), "Added"),
-      h("div", { class: "lg" }, sw({ background: "var(--modified-fill)", border: "1px solid var(--modified)" }), "Modified"),
-      h("div", { class: "lg" }, sw({ background: "var(--deleted-fill)", border: "1px solid var(--deleted)" }), "Deleted"),
-      h("div", { class: "lg" }, sw({ background: "var(--unchanged-fill)", border: "1px solid var(--text-3)" }), "Unchanged"),
-      h("h6", null, "Edges"),
-      h("div", { class: "lg" }, ln({}), "Verified site"),
-      h("div", { class: "lg" }, ln({ borderTopStyle: "dotted", borderTopColor: "var(--text-3)" }), "No reference"));
+
+    return el("div", { class: "legend" },
+      el("button", { class: "icon-btn legend-x", title: "Hide legend", html: icon("close", "sm"), onclick: () => setLegendShown(false) }),
+      el("h6", null, "Reference status"),
+      el("div", { class: "lg" }, swatch({ border: "1.5px solid var(--text-2)" }), "Verified"),
+      el("div", { class: "lg" }, swatch({ border: "2.5px solid var(--bad)" }), "Contradicted"),
+      el("div", { class: "lg" }, swatch({ border: "2px dashed var(--warn)" }), "Unresolved"),
+      el("div", { class: "lg" }, swatch({ border: "2px dotted var(--agent)" }), el("i", null, "Agent statement")),
+      el("h6", null, "Change"),
+      el("div", { class: "lg" }, swatch({ background: "var(--added-fill)", border: "1px solid var(--added)" }), "Added"),
+      el("div", { class: "lg" }, swatch({ background: "var(--modified-fill)", border: "1px solid var(--modified)" }), "Modified"),
+      el("div", { class: "lg" }, swatch({ background: "var(--deleted-fill)", border: "1px solid var(--deleted)" }), "Deleted"),
+      el("div", { class: "lg" }, swatch({ background: "var(--unchanged-fill)", border: "1px solid var(--text-3)" }), "Unchanged"),
+      el("h6", null, "Edges"),
+      el("div", { class: "lg" }, lineSample({}), "Verified site"),
+      el("div", { class: "lg" }, lineSample({ borderTopStyle: "dotted", borderTopColor: "var(--text-3)" }), "No reference"));
   }
 
   // ── Tooltip ────────────────────────────────────────────────
-  function showTooltip(ev, html) {
-    if (!tooltipEl) { tooltipEl = h("div", { class: "tooltip" }); document.body.appendChild(tooltipEl); }
+  function showTooltip(event, html) {
+    if (!tooltipEl) {
+      tooltipEl = el("div", { class: "tooltip" });
+      document.body.appendChild(tooltipEl);
+    }
     tooltipEl.innerHTML = html;
     tooltipEl.classList.add("on");
-    moveTooltip(ev);
+    moveTooltip(event);
   }
-  function moveTooltip(ev) {
-    if (!tooltipEl || !ev) return;
-    const pad = 14, r = tooltipEl.getBoundingClientRect();
-    let x = ev.clientX + pad, y = ev.clientY + pad;
-    if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - pad;
-    if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - pad;
-    tooltipEl.style.left = x + "px";
-    tooltipEl.style.top = y + "px";
-  }
-  function hideTooltip() { tooltipEl && tooltipEl.classList.remove("on"); }
 
-  function reasonHTML(res) {
-    if (res.status === "contradicted") return `<div class="tt-r tt-bad">✕ ${esc(res.reason || "contradicted")}</div>`;
-    if (res.status === "unresolved") return `<div class="tt-r tt-warn">? ${esc(res.reason || "unresolved")}</div>`;
-    if (res.status === "agent") return `<div class="tt-r"><i>No reference: the agent's word</i></div>`;
+  const TOOLTIP_OFFSET = 14;
+  const WINDOW_MARGIN = 8;
+
+  // Places the tooltip beside the pointer, flipped to the other side near the window edge.
+  function moveTooltip(event) {
+    if (!tooltipEl || !event) return;
+
+    const rect = tooltipEl.getBoundingClientRect();
+    const right = event.clientX + TOOLTIP_OFFSET;
+    const below = event.clientY + TOOLTIP_OFFSET;
+    const left = right + rect.width > innerWidth - WINDOW_MARGIN ? event.clientX - rect.width - TOOLTIP_OFFSET : right;
+    const top = below + rect.height > innerHeight - WINDOW_MARGIN ? event.clientY - rect.height - TOOLTIP_OFFSET : below;
+
+    tooltipEl.style.left = left + "px";
+    tooltipEl.style.top = top + "px";
+  }
+
+  function hideTooltip() {
+    if (tooltipEl) tooltipEl.classList.remove("on");
+  }
+
+  function reasonHTML(result) {
+    if (result.status === "contradicted") return `<div class="tt-r tt-bad">✕ ${escapeHTML(result.reason || "contradicted")}</div>`;
+    if (result.status === "unresolved") return `<div class="tt-r tt-warn">? ${escapeHTML(result.reason || "unresolved")}</div>`;
+    if (result.status === "agent") return `<div class="tt-r"><i>No reference: the agent's word</i></div>`;
+
     return "";
   }
-  function nodeTooltip(n) {
-    return `<div class="tt-t">${esc(n.label)}</div><div>${esc(CHANGE_LABEL[n.change])} ${esc(n.kind)}${n.ref ? " · " + esc(n.ref.repo + " " + refText(n.ref)) : ""}</div>${reasonHTML(n.result)}`;
+
+  function nodeTooltip(node) {
+    const refLocation = node.ref ? " · " + escapeHTML(node.ref.repo + " " + refText(node.ref)) : "";
+
+    return `<div class="tt-t">${escapeHTML(node.label)}</div><div>${escapeHTML(CHANGE_LABEL[node.change])} ${escapeHTML(node.kind)}${refLocation}</div>${reasonHTML(node.result)}`;
   }
-  function edgeTooltip(e) {
-    const a = nodeById.get(e.from), b = nodeById.get(e.to);
-    return `<div class="tt-t">${esc(a.label)} → ${esc(e.kind)} → ${esc(b.label)}</div>${e.ref ? `<div>${esc(e.ref.repo + " " + refText(e.ref))}</div>` : ""}${reasonHTML(e.result)}`;
+
+  function edgeTooltip(edge) {
+    const fromNode = nodeById.get(edge.from);
+    const toNode = nodeById.get(edge.to);
+    const refLocation = edge.ref ? `<div>${escapeHTML(edge.ref.repo + " " + refText(edge.ref))}</div>` : "";
+
+    return `<div class="tt-t">${escapeHTML(fromNode.label)} → ${escapeHTML(edge.kind)} → ${escapeHTML(toNode.label)}</div>${refLocation}${reasonHTML(edge.result)}`;
   }
 
   // ── Node cards (flows) ─────────────────────────────────────
-  function nodeCard(n, small) {
-    const observed = n.meta && n.meta.find((m) => m.key === "observed");
-    const el = h("button", { class: `ncard ${n.change} ${n.result.status}${n.kind === "test" ? " test" : ""}`, "data-node": n.id, onclick: () => select({ type: "node", id: n.id }),
-      onmouseenter: (ev) => showTooltip(ev, nodeTooltip(n)), onmousemove: moveTooltip, onmouseleave: hideTooltip },
-      h("div", { class: "ic", html: icon(kindIcon(n.kind)) }),
-      h("div", { class: "tx" },
-        h("div", { class: "lb" }, n.label),
-        h("div", { class: "sb" }, `${n.kind} · ${nodeSub(n)}`),
-        observed ? h("span", { class: "says " + observedClass(observed.value) }, `agent says: ${observed.value}`) : null),
-      n.result.status === "contradicted" || n.result.status === "unresolved" ? h("div", { class: `st ${n.result.status}`, html: icon(STATUS_ICON[n.result.status], "sm") }) : null);
-    if (small) el.style.width = "200px";
-    return el;
+  // isSmall: a narrower card hanging off a flow step as one of its tests.
+  function nodeCard(node, isSmall) {
+    return el("button", {
+      class: `ncard ${node.change} ${node.result.status}${node.kind === "test" ? " test" : ""}`,
+      "data-node": node.id,
+      onclick: () => select({ type: "node", id: node.id }),
+      onmouseenter: (event) => showTooltip(event, nodeTooltip(node)),
+      onmousemove: moveTooltip,
+      onmouseleave: hideTooltip,
+      style: isSmall ? { width: "200px" } : null,
+    }, nodeCardBody(node, "sm"));
   }
 
   // ── Flows view ─────────────────────────────────────────────
   function flowsView() {
-    if (!D.flows.length) {
-      viewEl.appendChild(h("div", { class: "empty" }, h("div", null, raw(icon("flows")), h("div", null, "The agent described no flows."))));
+    if (!reviewData.flows.length) {
+      viewEl.appendChild(el("div", { class: "empty" }, el("div", null, htmlFragment(icon("flows")), el("div", null, "The agent described no flows."))));
+
       return;
     }
-    const wrap = h("div", { class: "flows" });
-    D.flows.forEach((f, fi) => {
-      const tests = (f.tests || []).map((id) => nodeById.get(id)).filter(Boolean);
-      const attached = new Map();
-      const loose = [];
-      for (const t of tests) {
-        const target = f.path.find((pid) => (outEdges.get(t.id) || []).some((e) => e.kind === "tests" && e.to === pid));
-        if (target) {
-          if (!attached.has(target)) attached.set(target, []);
-          attached.get(target).push(t);
-        } else loose.push(t);
-      }
-      const statuses = f.path.map((id) => nodeById.get(id)?.result.status);
-      const bad = statuses.filter((s) => s === "contradicted" || s === "unresolved").length;
-      const card = h("section", { class: "flow" });
-      card.appendChild(h("div", { class: "flow-head" },
-        h("span", { html: icon("flows"), style: { color: "var(--accent)" } }),
-        h("h3", null, f.title),
-        h("span", { class: "badge mono" }, f.id),
-        h("div", { class: "meta" },
-          h("span", { class: "badge" }, plural(f.path.length, "step")),
-          h("span", { class: "badge", html: icon("test", "sm") + esc(plural(tests.length, "test")) }),
-          bad ? h("span", { class: "badge contradicted" }, plural(bad, "issue")) : null)));
-      const lane = h("div", { class: "lane" });
-      f.path.forEach((id, i) => {
-        const n = nodeById.get(id);
-        if (!n) return;
-        if (i > 0) lane.appendChild(connector(f.path[i - 1], id));
-        const step = h("div", { class: "step" }, h("div", { class: "step-n" }, `${String(i + 1).padStart(2, "0")}`), nodeCard(n));
-        const att = attached.get(id) || [];
-        if (att.length) {
-          const box = h("div", { class: "attached" });
-          for (const t of att) box.append(h("div", { class: "stem" }), nodeCard(t, true));
-          step.appendChild(box);
-        }
-        lane.appendChild(step);
-      });
-      card.appendChild(lane);
-      if (loose.length || !tests.length) {
-        card.appendChild(h("div", { class: "flow-foot" },
-          tests.length ? [h("span", null, "Tests on this flow without a `tests` edge to a step:"), loose.map((t) => nodeChip(t))]
-            : h("span", { class: "muted", html: icon("info", "sm") + " No tests listed for this flow." })));
-      }
-      wrap.appendChild(card);
-    });
-    viewEl.appendChild(wrap);
+
+    viewEl.appendChild(el("div", { class: "flows" }, reviewData.flows.map((flow) => flowCard(flow))));
     highlightSelection();
   }
 
-  function connector(a, b) {
-    const fwd = (outEdges.get(a) || []).find((e) => e.to === b);
-    const rev = !fwd && (outEdges.get(b) || []).find((e) => e.to === a);
-    const e = fwd || rev;
-    const cls = e ? e.result.status : "none";
-    const c = h("div", { class: `connector ${cls}${rev ? " rev" : ""}` }, h("div", { class: "line" }));
-    if (e) {
-      c.appendChild(h("span", { class: "ek", onclick: () => select({ type: "edge", id: e.id }), onmouseenter: (ev) => showTooltip(ev, edgeTooltip(e)), onmouseleave: hideTooltip }, e.kind));
+  function flowCard(flow) {
+    const tests = (flow.tests || []).map((id) => nodeById.get(id)).filter(Boolean);
+    // The first step the test has a `tests` edge to; tests without one are listed below the lane.
+    const testedStep = (test) => flow.path.find((stepId) => outgoingEdges(test.id).some((edge) => edge.kind === "tests" && edge.to === stepId));
+    const attached = groupBy(tests.filter(testedStep), testedStep);
+    const loose = tests.filter((test) => !testedStep(test));
+    const issueCount = flow.path.filter((id) => isProblemStatus(nodeById.get(id)?.result.status)).length;
+    const card = el("section", { class: "flow" });
+
+    card.appendChild(el("div", { class: "flow-head" },
+      el("span", { html: icon("flows"), style: { color: "var(--accent)" } }),
+      el("h3", null, flow.title),
+      el("span", { class: "badge mono" }, flow.id),
+      el("div", { class: "meta" },
+        el("span", { class: "badge" }, plural(flow.path.length, "step")),
+        el("span", { class: "badge", html: icon("test", "sm") + escapeHTML(plural(tests.length, "test")) }),
+        issueCount ? el("span", { class: "badge contradicted" }, plural(issueCount, "issue")) : null)));
+
+    const lane = el("div", { class: "lane" });
+
+    flow.path.forEach((id, i) => {
+      const node = nodeById.get(id);
+
+      if (!node) return;
+      if (i > 0) lane.appendChild(connector(flow.path[i - 1], id));
+
+      const step = el("div", { class: "step" }, el("div", { class: "step-n" }, String(i + 1).padStart(2, "0")), nodeCard(node));
+      const stepTests = attached.get(id) || [];
+
+      if (stepTests.length) {
+        step.appendChild(el("div", { class: "attached" }, stepTests.map((test) => [el("div", { class: "stem" }), nodeCard(test, true)])));
+      }
+      lane.appendChild(step);
+    });
+    card.appendChild(lane);
+
+    if (loose.length || !tests.length) {
+      card.appendChild(el("div", { class: "flow-foot" },
+        tests.length
+          ? [el("span", null, "Tests on this flow without a `tests` edge to a step:"), loose.map((test) => nodeChip(test))]
+          : el("span", { class: "muted", html: icon("info", "sm") + " No tests listed for this flow." })));
     }
-    return c;
+
+    return card;
   }
 
-  function nodeChip(n) {
-    const color = { verified: "var(--ok)", contradicted: "var(--bad)", unresolved: "var(--warn)", agent: "var(--agent)" }[n.result.status];
-    return h("button", { class: "chip" + (n.kind === "test" ? " test" : ""), onclick: () => select({ type: "node", id: n.id }), title: `${n.kind} · ${STATUS_LABEL[n.result.status]}` },
-      h("span", { class: "dot", style: { background: color } }), n.label);
+  // The link between two consecutive flow steps, drawn from the edge that joins them either way.
+  function connector(fromId, toId) {
+    const forward = outgoingEdges(fromId).find((edge) => edge.to === toId);
+    const reverse = !forward && outgoingEdges(toId).find((edge) => edge.to === fromId);
+    const edge = forward || reverse;
+    const link = el("div", { class: `connector ${edge ? edge.result.status : "none"}${reverse ? " rev" : ""}` }, el("div", { class: "line" }));
+
+    if (!edge) return link;
+
+    link.appendChild(el("span", {
+      class: "ek",
+      onclick: () => select({ type: "edge", id: edge.id }),
+      onmouseenter: (event) => showTooltip(event, edgeTooltip(edge)),
+      onmouseleave: hideTooltip,
+    }, edge.kind));
+
+    return link;
+  }
+
+  const STATUS_COLOR = {
+    verified: "var(--ok)",
+    contradicted: "var(--bad)",
+    unresolved: "var(--warn)",
+    agent: "var(--agent)",
+  };
+
+  function nodeChip(node) {
+    return el("button", {
+      class: "chip" + (node.kind === "test" ? " test" : ""),
+      onclick: () => select({ type: "node", id: node.id }),
+      title: `${node.kind} · ${STATUS_LABEL[node.result.status]}`,
+    },
+    el("span", { class: "dot", style: { background: STATUS_COLOR[node.result.status] } }),
+    node.label);
   }
 
   // ── Diff map ───────────────────────────────────────────────
+  const COMMIT_OPTION_MAX_CHARS = 80;
+
+  // Commit filter choices: only repos the change spans with more than one commit.
   function commitOptions() {
-    const opts = [];
-    for (const r of D.repos) {
-      if (r.role === "context" || r.commits.length < 2) continue;
-      for (const c of r.commits) opts.push({ value: `${r.id}@${c.sha}`, label: `${r.id} · ${c.worktree ? "worktree" : c.short} · ${c.subject || ""}`.slice(0, 80) });
-    }
-    return opts;
+    return reviewData.repos
+      .filter((repo) => repo.role !== "context" && repo.commits.length >= 2)
+      .flatMap((repo) => repo.commits.map((commit) => ({
+        value: `${repo.id}@${commit.sha}`,
+        label: `${repo.id} · ${commit.worktree ? "worktree" : commit.short} · ${commit.subject || ""}`.slice(0, COMMIT_OPTION_MAX_CHARS),
+      })));
   }
 
-  function hunkInCommit(f, hk) {
+  function hunkInCommit(file, hunk) {
     if (!state.commitFilter) return true;
+
     const [repo, sha] = state.commitFilter.split("@");
-    return f.repo === repo && (hk.commits || []).includes(sha);
+
+    return file.repo === repo && (hunk.commits || []).includes(sha);
+  }
+
+  const DIFF_FILTER_LABEL = { all: "All files", uncovered: "Needs attention", covered: "Covered" };
+
+  function diffToolbar() {
+    const choices = commitOptions();
+
+    if (choices.length) {
+      toolbarEl.appendChild(el("select", {
+        class: "select",
+        title: "Show the hunks each commit wrote",
+        onchange: (event) => {
+          state.commitFilter = event.target.value;
+          renderView();
+        },
+      },
+      el("option", { value: "" }, "All commits"),
+      choices.map((choice) => el("option", { value: choice.value, selected: state.commitFilter === choice.value }, choice.label))));
+      toolbarEl.appendChild(el("span", { class: "tb-sep" }));
+    }
+
+    toolbarEl.appendChild(el("div", { class: "seg" },
+      Object.entries(DIFF_FILTER_LABEL).map(([filter, label]) => el("button", {
+        class: state.diffFilter === filter ? "on" : "",
+        onclick: () => {
+          state.diffFilter = filter;
+          renderView();
+        },
+      }, label))));
+    toolbarEl.appendChild(el("span", { class: "tb-sep" }));
+    toolbarEl.appendChild(el("button", {
+      class: "icon-btn",
+      title: "Expand all",
+      html: icon("layers"),
+      onclick: () => {
+        const isAllOpen = reviewData.files.every((file) => state.openFiles.has(file.id));
+
+        reviewData.files.forEach((file) => {
+          if (isAllOpen) state.openFiles.delete(file.id);
+          else state.openFiles.add(file.id);
+        });
+        renderView();
+      },
+    }));
+  }
+
+  function coverageSummary() {
+    // A file without hunks (binary, pure rename) counts once with its own coverage.
+    const hunks = reviewData.files.flatMap((file) => (file.hunks.length ? file.hunks : [{ coverage: file.coverage }]));
+    const coverage = { covered: 0, partial: 0, uncovered: 0 };
+
+    hunks.forEach((hunk) => {
+      coverage[hunk.coverage]++;
+    });
+
+    const total = hunks.length || 1;
+    const added = reviewData.files.reduce((sum, file) => sum + file.added, 0);
+    const removed = reviewData.files.reduce((sum, file) => sum + file.removed, 0);
+
+    return el("div", { class: "dm-summary" },
+      el("div", { class: "dm-stat" }, el("span", { class: "v" }, reviewData.files.length), el("span", { class: "k" }, "files")),
+      el("div", { class: "dm-stat" }, el("span", { class: "v" }, hunks.length), el("span", { class: "k" }, "hunks")),
+      el("div", { class: "dm-stat" }, el("span", { class: "v plus" }, "+" + added), el("span", { class: "k" }, "added")),
+      el("div", { class: "dm-stat" }, el("span", { class: "v minus" }, "−" + removed), el("span", { class: "k" }, "removed")),
+      el("div", { class: "covbar" },
+        el("div", { class: "bar" }, ["covered", "partial", "uncovered"].map((level) =>
+          el("span", { class: "c-" + level, style: { width: (coverage[level] / total) * 100 + "%" } }))),
+        el("div", { class: "lbl" },
+          el("span", null, el("i", { class: "c-covered" }), `${coverage.covered} covered by nodes`),
+          el("span", null, el("i", { class: "c-partial" }), `${coverage.partial} partly covered`),
+          el("span", null, el("i", { class: "c-uncovered" }), `${coverage.uncovered} unmentioned`))));
+  }
+
+  function matchesDiffFilter(file) {
+    if (state.diffFilter === "uncovered") return file.coverage !== "covered";
+    if (state.diffFilter === "covered") return file.coverage === "covered";
+
+    return true;
+  }
+
+  function matchesCommitFilter(file) {
+    return !state.commitFilter || file.hunks.some((hunk) => hunkInCommit(file, hunk));
+  }
+
+  // One repo's part of the diff map, or null when it has no files or the commit filter excludes it.
+  function repoDiffSection(repo) {
+    const repoFiles = reviewData.files.filter((file) => file.repo === repo.id);
+
+    if (!repoFiles.length) return null;
+    if (state.commitFilter && !state.commitFilter.startsWith(repo.id + "@")) return null;
+
+    const shownFiles = repoFiles.filter((file) => matchesDiffFilter(file) && matchesCommitFilter(file));
+    const section = el("section", { class: "dm-repo" });
+
+    section.appendChild(el("div", { class: "dm-repo-head", html: icon("repo", "sm") },
+      el("span", { class: "name" }, repo.id),
+      el("span", { class: "muted mono" }, repo.path),
+      el("span", { class: "spacer" }),
+      el("span", { class: "badge mono" }, repo.worktree ? "worktree" : shortSha(repo.commits[0]?.sha)),
+      el("span", { class: "muted", style: { fontSize: "12px" } }, plural(repoFiles.length, "file"))));
+    if (!shownFiles.length) section.appendChild(el("div", { class: "code-note" }, "No files match this filter."));
+    shownFiles.forEach((file) => section.append(...fileRow(file)));
+
+    return section;
   }
 
   function diffView() {
-    const copts = commitOptions();
-    if (copts.length) {
-      toolbarEl.appendChild(h("select", { class: "select", title: "Show the hunks each commit wrote", onchange: (ev) => { state.commitFilter = ev.target.value; renderView(); } },
-        h("option", { value: "" }, "All commits"),
-        copts.map((o) => h("option", { value: o.value, selected: state.commitFilter === o.value }, o.label))));
-      toolbarEl.appendChild(h("span", { class: "tb-sep" }));
-    }
-    toolbarEl.appendChild(h("div", { class: "seg" },
-      ["all", "uncovered", "covered"].map((f) => h("button", { class: state.diffFilter === f ? "on" : "", onclick: () => { state.diffFilter = f; renderView(); } },
-        { all: "All files", uncovered: "Needs attention", covered: "Covered" }[f]))));
-    toolbarEl.appendChild(h("span", { class: "tb-sep" }));
-    toolbarEl.appendChild(h("button", { class: "icon-btn", title: "Expand all", html: icon("layers"), onclick: () => {
-      const all = D.files.every((f) => state.openFiles.has(f.id));
-      D.files.forEach((f) => (all ? state.openFiles.delete(f.id) : state.openFiles.add(f.id)));
-      renderView();
-    } }));
+    diffToolbar();
 
-    const wrap = h("div", { class: "diffmap" });
-    const hunks = D.files.flatMap((f) => f.hunks.length ? f.hunks : [{ coverage: f.coverage }]);
-    const cov = { covered: 0, partial: 0, uncovered: 0 };
-    hunks.forEach((x) => cov[x.coverage]++);
-    const total = hunks.length || 1;
-    const added = D.files.reduce((a, f) => a + f.added, 0), removed = D.files.reduce((a, f) => a + f.removed, 0);
-    wrap.appendChild(h("div", { class: "dm-summary" },
-      h("div", { class: "dm-stat" }, h("span", { class: "v" }, D.files.length), h("span", { class: "k" }, "files")),
-      h("div", { class: "dm-stat" }, h("span", { class: "v" }, hunks.length), h("span", { class: "k" }, "hunks")),
-      h("div", { class: "dm-stat" }, h("span", { class: "v plus" }, "+" + added), h("span", { class: "k" }, "added")),
-      h("div", { class: "dm-stat" }, h("span", { class: "v minus" }, "−" + removed), h("span", { class: "k" }, "removed")),
-      h("div", { class: "covbar" },
-        h("div", { class: "bar" }, ["covered", "partial", "uncovered"].map((k) => h("span", { class: "c-" + k, style: { width: (cov[k] / total) * 100 + "%" } }))),
-        h("div", { class: "lbl" },
-          h("span", null, h("i", { class: "c-covered" }), `${cov.covered} covered by nodes`),
-          h("span", null, h("i", { class: "c-partial" }), `${cov.partial} partly covered`),
-          h("span", null, h("i", { class: "c-uncovered" }), `${cov.uncovered} unmentioned`)))));
+    const wrap = el("div", { class: "diffmap" }, coverageSummary());
 
-    if (!D.files.length) {
-      wrap.appendChild(h("div", { class: "empty" }, "No changed files in the listed repos."));
+    if (!reviewData.files.length) {
+      wrap.appendChild(el("div", { class: "empty" }, "No changed files in the listed repos."));
       viewEl.appendChild(wrap);
+
       return;
     }
 
-    for (const r of D.repos) {
-      let files = D.files.filter((f) => f.repo === r.id);
-      if (!files.length) continue;
-      if (state.commitFilter && !state.commitFilter.startsWith(r.id + "@")) continue;
-      if (state.diffFilter === "uncovered") files = files.filter((f) => f.coverage !== "covered");
-      if (state.diffFilter === "covered") files = files.filter((f) => f.coverage === "covered");
-      if (state.commitFilter) files = files.filter((f) => f.hunks.some((hk) => hunkInCommit(f, hk)));
-      const sec = h("section", { class: "dm-repo" });
-      sec.appendChild(h("div", { class: "dm-repo-head", html: icon("repo", "sm") },
-        h("span", { class: "name" }, r.id),
-        h("span", { class: "muted mono" }, r.path),
-        h("span", { class: "spacer" }),
-        h("span", { class: "badge mono" }, r.worktree ? "worktree" : short(r.commits[0]?.sha)),
-        h("span", { class: "muted", style: { fontSize: "12px" } }, plural(D.files.filter((f) => f.repo === r.id).length, "file"))));
-      if (!files.length) sec.appendChild(h("div", { class: "code-note" }, "No files match this filter."));
-      for (const f of files) sec.append(...fileRow(f));
-      wrap.appendChild(sec);
+    for (const repo of reviewData.repos) {
+      const section = repoDiffSection(repo);
+
+      if (section) wrap.appendChild(section);
     }
     viewEl.appendChild(wrap);
   }
 
-  function fileRow(f) {
-    const open = state.openFiles.has(f.id);
-    const statusLetter = { added: "A", modified: "M", deleted: "D", renamed: "R" }[f.status];
-    const lines = Math.max(f.lines, 1);
-    const track = h("div", { class: "track", title: "Hunks along the file: green covered, amber partly covered, red unmentioned" });
-    for (const hk of f.hunks) {
-      const start = f.status === "deleted" || hk.newCount === 0 ? (f.status === "deleted" ? hk.oldStart : hk.newStart) : hk.newStart;
-      const len = f.status === "deleted" ? hk.oldCount : Math.max(hk.newCount, 1);
-      track.appendChild(h("span", { class: "seg-h c-" + hk.coverage, style: { left: ((start - 1) / lines) * 100 + "%", width: (len / lines) * 100 + "%" } }));
+  // Flips a file or evidence row open or closed (as rendered) and re-renders the view.
+  function toggleOpen(id, isOpen) {
+    if (isOpen) state.openFiles.delete(id);
+    else state.openFiles.add(id);
+    renderView();
+  }
+
+  const STATUS_LETTER = { added: "A", modified: "M", deleted: "D", renamed: "R" };
+  const COVERAGE_ICON = {
+    covered: ["checkcircle", "var(--ok)"],
+    partial: ["alert", "var(--warn)"],
+    uncovered: ["xcircle", "var(--bad)"],
+  };
+  const COVERAGE_BADGE = { covered: "verified", partial: "unresolved", uncovered: "contradicted" };
+
+  // Hunk markers along a file's length, placed by final-state lines (initial for deletions).
+  function trackSegments(file) {
+    const lineCount = Math.max(file.lines, 1);
+
+    if (!file.hunks.length) return [el("span", { class: "seg-h c-" + file.coverage, style: { left: 0, width: "100%", opacity: 0.5 } })];
+
+    return file.hunks.map((hunk) => {
+      const isDeleted = file.status === "deleted";
+      const start = isDeleted ? hunk.oldStart : hunk.newStart;
+      const length = isDeleted ? hunk.oldCount : Math.max(hunk.newCount, 1);
+
+      return el("span", {
+        class: "seg-h c-" + hunk.coverage,
+        style: { left: ((start - 1) / lineCount) * 100 + "%", width: (length / lineCount) * 100 + "%" },
+      });
+    });
+  }
+
+  // The file's row in the diff map, plus its hunks when the row is open.
+  function fileRow(file) {
+    const isOpen = state.openFiles.has(file.id);
+    const coverageIcon = COVERAGE_ICON[file.coverage];
+    const details = [
+      file.oldPath ? `renamed from ${file.oldPath}` : null,
+      file.untracked ? "untracked" : null,
+      file.binary ? "binary" : null,
+      file.language || "plain text",
+      file.hasTests ? "test file" : null,
+    ];
+    const row = el("div", { class: "frow" + (isOpen ? " open" : ""), onclick: () => toggleOpen(file.id, isOpen) },
+      el("span", { class: "chev", html: icon("chevron", "sm") }),
+      el("span", { class: "fstat " + file.status, title: CHANGE_LABEL[file.status] }, STATUS_LETTER[file.status]),
+      el("div", { style: { minWidth: 0 } },
+        el("div", { class: "fpath", title: file.path },
+          el("bdi", null, el("span", { class: "dir" }, dirname(file.path)), el("span", { class: "base" }, basename(file.path)))),
+        el("div", { class: "fsub" }, details.filter(Boolean).join(" · "))),
+      el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+        el("span", { html: icon(coverageIcon[0], "sm"), style: { color: coverageIcon[1] } }),
+        el("div", { class: "track", style: { flex: 1 } }, trackSegments(file))),
+      el("div", { class: "fnums" }, el("span", { class: "plus" }, `+${file.added}`), " ", el("span", { class: "minus" }, `−${file.removed}`)));
+
+    if (!isOpen) return [row];
+
+    const body = el("div", { class: "hunks" });
+
+    if (file.fileNodes && file.fileNodes.length) {
+      body.appendChild(el("div", { class: "hunk-head", style: { border: 0, background: "none", padding: 0 } },
+        el("span", { class: "muted" }, "Whole file covered by"),
+        file.fileNodes.map((id) => nodeChip(nodeById.get(id)))));
     }
-    if (!f.hunks.length) track.appendChild(h("span", { class: "seg-h c-" + f.coverage, style: { left: 0, width: "100%", opacity: 0.5 } }));
-    const covIcon = { covered: ["checkcircle", "var(--ok)"], partial: ["alert", "var(--warn)"], uncovered: ["xcircle", "var(--bad)"] }[f.coverage];
-    const row = h("div", { class: "frow" + (open ? " open" : ""), onclick: () => { open ? state.openFiles.delete(f.id) : state.openFiles.add(f.id); renderView(); } },
-      h("span", { class: "chev", html: icon("chevron", "sm") }),
-      h("span", { class: "fstat " + f.status, title: CHANGE_LABEL[f.status] }, statusLetter),
-      h("div", { style: { minWidth: 0 } },
-        h("div", { class: "fpath", title: f.path }, h("bdi", null, h("span", { class: "dir" }, dirname(f.path)), h("span", { class: "base" }, basename(f.path)))),
-        h("div", { class: "fsub" }, [f.oldPath ? `renamed from ${f.oldPath}` : null, f.untracked ? "untracked" : null, f.binary ? "binary" : null, f.language || "plain text",
-          f.hasTests ? "test file" : null].filter(Boolean).join(" · "))),
-      h("div", { style: { display: "flex", alignItems: "center", gap: "8px" } }, h("span", { html: icon(covIcon[0], "sm"), style: { color: covIcon[1] } }), h("div", { class: "track", style: { flex: 1 } }, ...track.childNodes)),
-      h("div", { class: "fnums" }, h("span", { class: "plus" }, `+${f.added}`), " ", h("span", { class: "minus" }, `−${f.removed}`)));
-    if (!open) return [row];
-    const body = h("div", { class: "hunks" });
-    if (f.fileNodes && f.fileNodes.length) {
-      body.appendChild(h("div", { class: "hunk-head", style: { border: 0, background: "none", padding: 0 } }, h("span", { class: "muted" }, "Whole file covered by"), f.fileNodes.map((id) => nodeChip(nodeById.get(id)))));
-    }
-    if (!f.hunks.length) body.appendChild(h("div", { class: "code-note" }, f.binary ? "Binary file: no line diff." : "Renamed without content change."));
-    for (const hk of f.hunks) if (hunkInCommit(f, hk)) body.appendChild(hunkBox(f, hk));
+    if (!file.hunks.length) body.appendChild(el("div", { class: "code-note" }, file.binary ? "Binary file: no line diff." : "Renamed without content change."));
+    file.hunks.filter((hunk) => hunkInCommit(file, hunk)).forEach((hunk) => body.appendChild(hunkBox(file, hunk)));
+
     return [row, body];
   }
 
-  function hunkRange(f, hk) {
-    if (hk.newCount === 0) return `−${hk.oldStart}${hk.oldCount > 1 ? "–" + (hk.oldStart + hk.oldCount - 1) : ""} (removed after line ${hk.newStart})`;
-    return `+${hk.newStart}${hk.newCount > 1 ? "–" + (hk.newStart + hk.newCount - 1) : ""}${hk.oldCount ? `  −${hk.oldStart}${hk.oldCount > 1 ? "–" + (hk.oldStart + hk.oldCount - 1) : ""}` : ""}`;
+  // "12–15" for count lines starting at start, "12" for a single line.
+  function lineSpan(start, count) {
+    return `${start}${count > 1 ? "–" + (start + count - 1) : ""}`;
   }
 
-  function hunkBox(f, hk) {
-    const label = { covered: "Covered", partial: "Partly covered", uncovered: "Not mentioned by any node" }[hk.coverage];
-    const box = h("div", { class: "hunk " + hk.coverage, id: "hunk-" + hk.id });
-    box.appendChild(h("div", { class: "hunk-head" },
-      h("span", { class: "rng" }, hunkRange(f, hk)),
-      h("span", { class: "badge " + ({ covered: "verified", partial: "unresolved", uncovered: "contradicted" }[hk.coverage]) }, label),
-      hk.uncovered && hk.coverage === "partial" ? h("span", { class: "muted", style: { fontSize: "11.5px" } }, `uncovered ${hk.oldSide ? "initial " : ""}lines ${hk.uncovered.map((r) => (r[0] === r[1] ? r[0] : r[0] + "–" + r[1])).join(", ")}`) : null,
-      h("span", { class: "spacer" }),
-      (hk.commits || []).map((c) => h("span", { class: "badge mono", title: "Written by " + (c === "WORKTREE" ? "uncommitted work" : c) }, c === "WORKTREE" ? "worktree" : short(c))),
-      hk.nodes.map((id) => nodeChip(nodeById.get(id))),
-      h("button", { class: "icon-btn", title: "Open in inspector", html: icon("arrow", "sm"), onclick: (ev) => { ev.stopPropagation(); select({ type: "hunk", id: hk.id }); } })));
-    box.appendChild(codeTable(hk.rows, null));
+  function hunkRange(hunk) {
+    if (hunk.newCount === 0) return `−${lineSpan(hunk.oldStart, hunk.oldCount)} (removed after line ${hunk.newStart})`;
+
+    const removed = hunk.oldCount ? `  −${lineSpan(hunk.oldStart, hunk.oldCount)}` : "";
+
+    return `+${lineSpan(hunk.newStart, hunk.newCount)}${removed}`;
+  }
+
+  const HUNK_COVERAGE_LABEL = { covered: "Covered", partial: "Partly covered", uncovered: "Not mentioned by any node" };
+
+  function hunkBox(file, hunk) {
+    const showUncovered = hunk.uncovered && hunk.coverage === "partial";
+    const box = el("div", { class: "hunk " + hunk.coverage, id: "hunk-" + hunk.id });
+
+    box.appendChild(el("div", { class: "hunk-head" },
+      el("span", { class: "rng" }, hunkRange(hunk)),
+      el("span", { class: "badge " + COVERAGE_BADGE[hunk.coverage] }, HUNK_COVERAGE_LABEL[hunk.coverage]),
+      showUncovered
+        ? el("span", { class: "muted", style: { fontSize: "11.5px" } }, `uncovered ${hunk.oldSide ? "initial " : ""}lines ${rangesText(hunk.uncovered)}`)
+        : null,
+      el("span", { class: "spacer" }),
+      (hunk.commits || []).map((sha) => el("span", {
+        class: "badge mono",
+        title: "Written by " + (sha === "WORKTREE" ? "uncommitted work" : sha),
+      }, sha === "WORKTREE" ? "worktree" : shortSha(sha))),
+      hunk.nodes.map((id) => nodeChip(nodeById.get(id))),
+      el("button", {
+        class: "icon-btn",
+        title: "Open in inspector",
+        html: icon("arrow", "sm"),
+        onclick: (event) => {
+          event.stopPropagation();
+          select({ type: "hunk", id: hunk.id });
+        },
+      })));
+    box.appendChild(codeTable(hunk.rows, null));
+
     return box;
   }
 
   // ── Code excerpt ───────────────────────────────────────────
+  const ROW_SIGN = { add: "+", del: "−" };
+  const CODE_COLUMNS = { after: 2, diff: 4 };
+
+  function codeRow(row, site, after) {
+    if (row.t === "gap") return el("tr", { class: "gap" }, el("td", { colspan: after ? CODE_COLUMNS.after : CODE_COLUMNS.diff }, "⋯"));
+
+    const isSite = site && row.n === site.line;
+    const codeHTML = isSite && site.contains ? markContains(row.h || "", site.contains) : row.h || "";
+    const lineCells = after
+      ? [el("td", { class: "ln", title: row.t === "add" ? "Changed line" : null }, row.n || "")]
+      : [el("td", { class: "ln" }, row.o || ""), el("td", { class: "ln" }, row.n || ""), el("td", { class: "sg" }, ROW_SIGN[row.t] || "")];
+
+    return el("tr", { class: `${row.t}${row.f ? " f" : ""}${isSite ? " site" : ""}` },
+      ...lineCells,
+      el("td", { class: "cd", html: codeHTML || " " }));
+  }
+
+  // site: the referenced line to highlight and the text to mark on it, or null.
   // after: the final-state code alone, one line-number column, no signs.
   function codeTable(rows, site, after) {
-    const tbody = h("tbody");
-    for (const r of rows) {
-      if (r.t === "gap") { tbody.appendChild(h("tr", { class: "gap" }, h("td", { colspan: after ? 2 : 4 }, "⋯"))); continue; }
-      let codeHTML = r.h || "";
-      const isSite = site && r.n === site.line;
-      if (isSite && site.contains) codeHTML = markContains(codeHTML, site.contains);
-      const sign = r.t === "add" ? "+" : r.t === "del" ? "−" : "";
-      const cells = after
-        ? [h("td", { class: "ln", title: r.t === "add" ? "Changed line" : null }, r.n || "")]
-        : [h("td", { class: "ln" }, r.o || ""), h("td", { class: "ln" }, r.n || ""), h("td", { class: "sg" }, sign)];
-      tbody.appendChild(h("tr", { class: `${r.t}${r.f ? " f" : ""}${isSite ? " site" : ""}` },
-        ...cells, h("td", { class: "cd", html: codeHTML || " " })));
-    }
-    return h("div", { class: "code-scroll" }, h("table", { class: "code" + (after ? " after" : "") }, tbody));
+    const tbody = el("tbody", null, rows.map((row) => codeRow(row, site, after)));
+
+    return el("div", { class: "code-scroll" }, el("table", { class: "code" + (after ? " after" : "") }, tbody));
   }
 
   // The code after the change: the whole file for a `file` ref, otherwise
   // the excerpt without its removed lines.
-  function afterRows(x) {
-    return x.after || (x.rows || []).filter((r) => r.t !== "del");
+  function afterRows(excerpt) {
+    return excerpt.after || (excerpt.rows || []).filter((row) => row.t !== "del");
   }
 
   // Wraps the first plain-text occurrence of needle in <mark>, across spans.
   function markContains(html, needle) {
-    const tmp = document.createElement("div");
-    tmp.innerHTML = html;
-    const text = tmp.textContent;
-    const idx = text.indexOf(needle);
-    if (idx < 0) return html;
-    let pos = 0;
-    const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
-    const parts = [];
-    let node;
-    while ((node = walker.nextNode())) {
-      const len = node.nodeValue.length;
-      const s = Math.max(idx, pos), e = Math.min(idx + needle.length, pos + len);
-      if (s < e) parts.push([node, s - pos, e - pos]);
-      pos += len;
+    const container = document.createElement("div");
+
+    container.innerHTML = html;
+
+    const matchStart = container.textContent.indexOf(needle);
+
+    if (matchStart < 0) return html;
+
+    const matchEnd = matchStart + needle.length;
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const pieces = [];
+    let offset = 0;
+    let textNode;
+
+    while ((textNode = walker.nextNode())) {
+      const length = textNode.nodeValue.length;
+      const start = Math.max(matchStart, offset);
+      const end = Math.min(matchEnd, offset + length);
+
+      if (start < end) pieces.push([textNode, start - offset, end - offset]);
+      offset += length;
     }
-    for (const [tn, s, e] of parts.reverse()) {
-      const after = tn.splitText(s);
-      after.splitText(e - s);
-      const m = document.createElement("mark");
-      after.parentNode.replaceChild(m, after);
-      m.appendChild(after);
+
+    // Split from the last piece back so earlier offsets stay valid.
+    for (const [piece, start, end] of pieces.reverse()) {
+      const marked = piece.splitText(start);
+
+      marked.splitText(end - start);
+
+      const mark = document.createElement("mark");
+
+      marked.parentNode.replaceChild(mark, marked);
+      mark.appendChild(marked);
     }
-    return tmp.innerHTML;
+
+    return container.innerHTML;
   }
 
-  function excerptBox(exId, ref, opts = {}) {
-    const x = exId && D.excerpts[exId];
-    if (!x) return null;
-    const stateLabel = x.state === "WORKTREE" ? "worktree" : short(x.state);
-    const kindLabel = { final: "final state", initial: "initial state", at: "at commit" }[x.stateKind] || "";
-    const box = h("div", { class: "code-box" });
-    box.appendChild(h("div", { class: "code-head", html: icon("file", "sm") },
-      h("span", { class: "fp", title: `${x.repo}: ${x.file}` }, `${x.file}${linesText(ref)}`),
-      x.oldPath ? h("span", { class: "badge renamed", title: "Renamed from " + x.oldPath }, "renamed") : null,
-      h("span", { class: "badge mono", title: kindLabel }, `${stateLabel}`),
-      h("span", { class: "badge" }, x.language || "plain text"),
-      h("button", { class: "icon-btn copy", title: "Copy path", html: icon("copy", "sm"), onclick: () => navigator.clipboard && navigator.clipboard.writeText(`${x.file}${ref && ref.lines ? ":" + ref.lines[0] : ref && ref.line ? ":" + ref.line : ""}`) })));
-    if (x.note) {
-      box.appendChild(h("div", { class: "code-note" }, x.note));
+  // The location the copy button puts on the clipboard: file plus first line.
+  function copyLocation(file, ref) {
+    if (ref && ref.lines) return `${file}:${ref.lines[0]}`;
+    if (ref && ref.line) return `${file}:${ref.line}`;
+
+    return String(file);
+  }
+
+  const STATE_KIND_LABEL = { final: "final state", initial: "initial state", at: "at commit" };
+  const CODE_MODES = [
+    ["diff", "Diff", "Changed lines with what they replaced"],
+    ["after", "After", "The code as it is after the change"],
+  ];
+
+  // Diff / After tabs; switching saves the mode and calls onChange to redraw the code.
+  function codeModeTabs(onChange) {
+    const buttons = CODE_MODES.map(([mode, label, title]) => el("button", {
+      class: state.codeMode === mode ? "on" : "",
+      role: "tab",
+      title,
+      "aria-selected": String(state.codeMode === mode),
+      onclick: () => {
+        state.codeMode = mode;
+        savePref("cv-code", mode);
+        buttons.forEach((button, i) => {
+          const isOn = CODE_MODES[i][0] === mode;
+
+          button.classList.toggle("on", isOn);
+          button.setAttribute("aria-selected", String(isOn));
+        });
+        onChange();
+      },
+    }, label));
+
+    return el("div", { class: "seg code-tabs", role: "tablist" }, ...buttons);
+  }
+
+  // excerptId keys reviewData.excerpts; options.actualLine moves the site mark
+  // to the line where the checked text was actually found.
+  function excerptBox(excerptId, ref, options = {}) {
+    const excerpt = excerptId && reviewData.excerpts[excerptId];
+
+    if (!excerpt) return null;
+
+    const stateLabel = excerpt.state === "WORKTREE" ? "worktree" : shortSha(excerpt.state);
+    const head = el("div", { class: "code-head", html: icon("file", "sm") },
+      el("span", { class: "fp", title: `${excerpt.repo}: ${excerpt.file}` }, `${excerpt.file}${linesText(ref)}`),
+      excerpt.oldPath ? el("span", { class: "badge renamed", title: "Renamed from " + excerpt.oldPath }, "renamed") : null,
+      el("span", { class: "badge mono", title: STATE_KIND_LABEL[excerpt.stateKind] || "" }, `${stateLabel}`),
+      el("span", { class: "badge" }, excerpt.language || "plain text"),
+      el("button", {
+        class: "icon-btn copy",
+        title: "Copy path",
+        html: icon("copy", "sm"),
+        onclick: () => navigator.clipboard && navigator.clipboard.writeText(copyLocation(excerpt.file, ref)),
+      }));
+    const box = el("div", { class: "code-box" }, head);
+
+    if (excerpt.note) {
+      box.appendChild(el("div", { class: "code-note" }, excerpt.note));
+
       return box;
     }
-    const site = ref && ref.type === "site" ? { line: opts.actualLine || ref.line, contains: ref.contains } : null;
+
+    const site = ref && ref.type === "site" ? { line: options.actualLine || ref.line, contains: ref.contains } : null;
     // Diff / After tabs only when the excerpt shows a change in the final state.
-    const tabs = x.stateKind === "final" && (x.rows || []).some((r) => r.t === "add" || r.t === "del");
-    const content = h("div");
-    const show = () => {
-      const after = tabs && state.codeMode === "after";
+    const hasTabs = excerpt.stateKind === "final" && (excerpt.rows || []).some((row) => row.t === "add" || row.t === "del");
+    const content = el("div");
+    const showCode = () => {
+      const after = hasTabs && state.codeMode === "after";
+      const isTruncated = after && excerpt.after ? excerpt.afterTruncated : excerpt.truncated;
+
       content.innerHTML = "";
-      content.appendChild(codeTable(after ? afterRows(x) : x.rows || [], site, after));
-      if (after && x.after ? x.afterTruncated : x.truncated) content.appendChild(h("div", { class: "trunc" }, "Excerpt truncated."));
+      content.appendChild(codeTable(after ? afterRows(excerpt) : excerpt.rows || [], site, after));
+      if (isTruncated) content.appendChild(el("div", { class: "trunc" }, "Excerpt truncated."));
     };
-    if (tabs) {
-      const seg = h("div", { class: "seg code-tabs", role: "tablist" });
-      const btns = [["diff", "Diff", "Changed lines with what they replaced"], ["after", "After", "The code as it is after the change"]].map(([mode, label, title]) =>
-        h("button", { class: state.codeMode === mode ? "on" : "", role: "tab", title, "aria-selected": String(state.codeMode === mode), onclick: () => {
-          state.codeMode = mode;
-          savePref("cv-code", mode);
-          btns.forEach((b, i) => { const on = i === (mode === "diff" ? 0 : 1); b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
-          show();
-        } }, label));
-      seg.append(...btns);
-      box.firstChild.insertBefore(seg, box.firstChild.querySelector(".fp").nextSibling);
-    }
-    show();
+
+    if (hasTabs) head.insertBefore(codeModeTabs(showCode), head.querySelector(".fp").nextSibling);
+    showCode();
     box.appendChild(content);
+
     return box;
   }
 
   // ── Claims ─────────────────────────────────────────────────
+  const CLAIM_FILTERS = ["all", "verified", "contradicted", "unresolved", "agent"];
+
   function claimsView() {
-    if (!D.claims.length) {
-      viewEl.appendChild(h("div", { class: "empty" }, h("div", null, raw(icon("claims")), h("div", null, "The agent made no claims."))));
+    if (!reviewData.claims.length) {
+      viewEl.appendChild(el("div", { class: "empty" }, el("div", null, htmlFragment(icon("claims")), el("div", null, "The agent made no claims."))));
+
       return;
     }
+
     const counts = {};
-    D.claims.forEach((c) => (counts[c.status] = (counts[c.status] || 0) + 1));
-    toolbarEl.appendChild(h("div", { class: "seg" },
-      ["all", "verified", "contradicted", "unresolved", "agent"].filter((s) => s === "all" || counts[s]).map((s) =>
-        h("button", { class: state.claimFilter === s ? "on" : "", onclick: () => { state.claimFilter = s; renderView(); } },
-          s === "all" ? `All ${D.claims.length}` : `${STATUS_LABEL[s]} ${counts[s]}`))));
-    const wrap = h("div", { class: "claims" });
-    D.claims.forEach((c, ci) => {
-      if (state.claimFilter !== "all" && c.status !== state.claimFilter) return;
-      const card = h("article", { class: "claim " + c.status });
-      card.appendChild(h("div", { class: "claim-head" },
-        h("div", { class: "claim-icon " + c.status, html: icon(STATUS_ICON[c.status]) }),
-        h("div", { style: { flex: 1, minWidth: 0 } },
-          h("div", { class: "claim-text" + (c.status === "agent" ? " agent" : "") }, c.text),
-          h("div", { class: "claim-about" },
-            statusBadge(c.status),
-            c.evidence.length ? h("span", { class: "muted", style: { fontSize: "12px" } }, plural(c.evidence.length, "piece") + " of evidence") : h("span", { class: "muted", style: { fontSize: "12px" } }, "no evidence: the agent's word"),
-            c.about.length ? h("span", { class: "muted", style: { fontSize: "12px", marginLeft: "6px" } }, "about") : null,
-            c.about.map((id) => nodeById.get(id) && nodeChip(nodeById.get(id)))))));
-      if (c.evidence.length) {
-        const evs = h("div", { class: "evidence" });
-        c.evidence.forEach((ev, ei) => {
-          const key = `${ci}:${ei}`;
-          const open = state.openFiles.has("ev:" + key);
-          evs.appendChild(h("div", { class: "ev-row" + (open ? " open" : ""), onclick: () => { open ? state.openFiles.delete("ev:" + key) : state.openFiles.add("ev:" + key); renderView(); } },
-            h("span", { class: "chev", html: icon("chevron", "sm") }),
-            h("span", { class: "sdot " + ev.result.status, title: STATUS_LABEL[ev.result.status] }),
-            h("span", { class: "badge mono" }, ev.ref.type),
-            h("span", { class: "ev-loc" }, h("b", { style: { color: "var(--accent-text)" } }, ev.ref.repo), " ", refText(ev.ref)),
-            ev.ref.contains ? h("span", { class: "ev-contains", title: ev.ref.contains }, ev.ref.contains) : null,
-            h("span", { class: "spacer" }),
-            statusBadge(ev.result.status)));
-          if (open) evs.appendChild(h("div", { class: "ev-body" }, resolvedFact(ev.ref, ev.result, ev.excerpt)));
-        });
-        card.appendChild(evs);
-      }
-      wrap.appendChild(card);
+
+    reviewData.claims.forEach((claim) => {
+      counts[claim.status] = (counts[claim.status] || 0) + 1;
+    });
+    toolbarEl.appendChild(el("div", { class: "seg" },
+      CLAIM_FILTERS.filter((status) => status === "all" || counts[status]).map((status) => el("button", {
+        class: state.claimFilter === status ? "on" : "",
+        onclick: () => {
+          state.claimFilter = status;
+          renderView();
+        },
+      }, status === "all" ? `All ${reviewData.claims.length}` : `${STATUS_LABEL[status]} ${counts[status]}`))));
+
+    const wrap = el("div", { class: "claims" });
+
+    reviewData.claims.forEach((claim, claimIndex) => {
+      if (state.claimFilter !== "all" && claim.status !== state.claimFilter) return;
+
+      wrap.appendChild(claimCard(claim, claimIndex));
     });
     viewEl.appendChild(wrap);
   }
 
-  function resolvedFact(ref, res, exId) {
-    const parts = [];
-    if (res.status === "contradicted" || res.status === "unresolved") parts.push(reasonCallout(res));
-    if (res.codes && res.codes.includes("site_offset")) parts.push(h("div", { class: "callout warn", style: { marginBottom: "8px" }, html: icon("alert", "sm") }, h("div", null, `Found on line ${res.actualLine}, not ${ref.line}.`)));
-    if (ref.type === "commit") {
-      const repo = repoById.get(ref.repo);
-      const c = repo && repo.commits.find((c) => c.sha === res.state || c.sha.startsWith(ref.sha));
-      parts.push(h("div", { class: "repo-card" }, h("div", { class: "commits" }, c ? h("div", { class: "commit" }, h("span", { class: "dot" }), h("span", { class: "sha" }, c.short), h("span", { class: "subj" }, c.subject)) : h("div", { class: "code-note" }, "Commit not in the list."))));
-    } else {
-      const box = excerptBox(exId, ref, { actualLine: res.actualLine });
-      if (box) parts.push(box);
-      else if (res.status === "verified") parts.push(h("div", { class: "code-note" }, "No excerpt available."));
-    }
-    return parts;
+  // claimIndex keys the open state of the claim's evidence rows ("ev:<claim>:<evidence>").
+  function claimCard(claim, claimIndex) {
+    const card = el("article", { class: "claim " + claim.status });
+    const evidenceNote = claim.evidence.length
+      ? el("span", { class: "muted", style: { fontSize: "12px" } }, plural(claim.evidence.length, "piece") + " of evidence")
+      : el("span", { class: "muted", style: { fontSize: "12px" } }, "no evidence: the agent's word");
+
+    card.appendChild(el("div", { class: "claim-head" },
+      el("div", { class: "claim-icon " + claim.status, html: icon(STATUS_ICON[claim.status]) }),
+      el("div", { style: { flex: 1, minWidth: 0 } },
+        el("div", { class: "claim-text" + (claim.status === "agent" ? " agent" : "") }, claim.text),
+        el("div", { class: "claim-about" },
+          statusBadge(claim.status),
+          evidenceNote,
+          claim.about.length ? el("span", { class: "muted", style: { fontSize: "12px", marginLeft: "6px" } }, "about") : null,
+          claim.about.map((id) => nodeById.get(id) && nodeChip(nodeById.get(id)))))));
+
+    if (!claim.evidence.length) return card;
+
+    card.appendChild(el("div", { class: "evidence" },
+      claim.evidence.map((evidence, evidenceIndex) => evidenceRows(evidence, `ev:${claimIndex}:${evidenceIndex}`))));
+
+    return card;
   }
 
-  function reasonCallout(res) {
-    const cls = res.status === "contradicted" ? "bad" : "warn";
-    return h("div", { class: `callout ${cls}`, style: { marginBottom: "8px" }, html: icon(res.status === "contradicted" ? "xcircle" : "help") },
-      h("div", null,
-        h("div", null, h("b", null, STATUS_LABEL[res.status] + ": "), res.reason || ""),
-        res.hint ? h("div", { class: "hint" }, "Hint for the agent: ", res.hint) : null,
-        res.codes && res.codes.length ? h("div", { class: "code" }, res.codes.join(" · ")) : null));
+  // An evidence row, plus the resolved fact below it when openKey is open.
+  function evidenceRows(evidence, openKey) {
+    const isOpen = state.openFiles.has(openKey);
+    const row = el("div", { class: "ev-row" + (isOpen ? " open" : ""), onclick: () => toggleOpen(openKey, isOpen) },
+      el("span", { class: "chev", html: icon("chevron", "sm") }),
+      el("span", { class: "sdot " + evidence.result.status, title: STATUS_LABEL[evidence.result.status] }),
+      el("span", { class: "badge mono" }, evidence.ref.type),
+      el("span", { class: "ev-loc" }, el("b", { style: { color: "var(--accent-text)" } }, evidence.ref.repo), " ", refText(evidence.ref)),
+      evidence.ref.contains ? el("span", { class: "ev-contains", title: evidence.ref.contains }, evidence.ref.contains) : null,
+      el("span", { class: "spacer" }),
+      statusBadge(evidence.result.status));
+
+    if (!isOpen) return [row];
+
+    return [row, el("div", { class: "ev-body" }, resolvedFact(evidence.ref, evidence.result, evidence.excerpt))];
+  }
+
+  function commitFact(ref, result) {
+    const repo = repoById.get(ref.repo);
+    const commit = repo && repo.commits.find((candidate) => candidate.sha === result.state || candidate.sha.startsWith(ref.sha));
+    const row = commit
+      ? el("div", { class: "commit" }, el("span", { class: "dot" }), el("span", { class: "sha" }, commit.short), el("span", { class: "subj" }, commit.subject))
+      : el("div", { class: "code-note" }, "Commit not in the list.");
+
+    return el("div", { class: "repo-card" }, el("div", { class: "commits" }, row));
+  }
+
+  // What the tool found for a ref: the failure reason, then the commit or code it resolved to.
+  function resolvedFact(ref, result, excerptId) {
+    const isSiteMoved = result.codes && result.codes.includes("site_offset");
+    const resolved = ref.type === "commit"
+      ? commitFact(ref, result)
+      : excerptBox(excerptId, ref, { actualLine: result.actualLine })
+        || (result.status === "verified" ? el("div", { class: "code-note" }, "No excerpt available.") : null);
+
+    return [
+      isProblemStatus(result.status) ? reasonCallout(result) : null,
+      isSiteMoved
+        ? el("div", { class: "callout warn", style: { marginBottom: "8px" }, html: icon("alert", "sm") },
+          el("div", null, `Found on line ${result.actualLine}, not ${ref.line}.`))
+        : null,
+      resolved,
+    ].filter(Boolean);
+  }
+
+  function reasonCallout(result) {
+    const isContradicted = result.status === "contradicted";
+
+    return el("div", { class: `callout ${isContradicted ? "bad" : "warn"}`, style: { marginBottom: "8px" }, html: icon(isContradicted ? "xcircle" : "help") },
+      el("div", null,
+        el("div", null, el("b", null, STATUS_LABEL[result.status] + ": "), result.reason || ""),
+        result.hint ? el("div", { class: "hint" }, "Hint for the agent: ", result.hint) : null,
+        result.codes && result.codes.length ? el("div", { class: "code" }, result.codes.join(" · ")) : null));
   }
 
   // ── Inspector ──────────────────────────────────────────────
-  // Leaves at least MAIN_MIN px for the view between the panels.
-  function clampInspector(w) {
-    const max = window.innerWidth - (state.sidebar ? state.sidebarWidth : 0) - MAIN_MIN;
-    return Math.round(Math.max(INS_MIN, Math.min(max, w)));
+  // Leaves at least MAIN_MIN_WIDTH px for the view between the panels.
+  function clampInspectorWidth(width) {
+    const max = window.innerWidth - (state.sidebar ? state.sidebarWidth : 0) - MAIN_MIN_WIDTH;
+
+    return Math.round(Math.max(INSPECTOR_MIN_WIDTH, Math.min(max, width)));
   }
+
   function applyInspectorWidth() {
     if (state.inspectorWidth) inspectorEl.style.setProperty("--ins-w", state.inspectorWidth + "px");
     else inspectorEl.style.removeProperty("--ins-w");
@@ -1207,245 +2152,462 @@
 
   // Drag handle on the inspector's left edge.
   function inspectorResizer() {
-    return dragHandle("ins-resizer", -1, () => inspectorEl.getBoundingClientRect().width,
-      (w) => { state.inspectorWidth = clampInspector(w); applyInspectorWidth(); },
-      () => savePref("cv-inspector-w", String(state.inspectorWidth)),
-      () => { state.inspectorWidth = 0; applyInspectorWidth(); savePref("cv-inspector-w", "0"); });
+    const setWidth = (width) => {
+      state.inspectorWidth = clampInspectorWidth(width);
+      applyInspectorWidth();
+    };
+    const reset = () => {
+      state.inspectorWidth = 0;
+      applyInspectorWidth();
+      savePref("cv-inspector-w", "0");
+    };
+
+    return dragHandle("ins-resizer", -1, () => inspectorEl.getBoundingClientRect().width, setWidth,
+      () => savePref("cv-inspector-w", String(state.inspectorWidth)), reset);
   }
+
+  function inspectorContent(selection) {
+    if (!selection) return null;
+    if (selection.type === "node" && nodeById.has(selection.id)) return nodeInspector(nodeById.get(selection.id));
+    if (selection.type === "edge" && edgeById.has(selection.id)) return edgeInspector(edgeById.get(selection.id));
+    if (selection.type === "hunk") return hunkInspector(selection.id);
+    if (selection.type === "findings") return findingsInspector(selection.id);
+
+    return null;
+  }
+
+  // Matches the inspector's CSS width transition.
+  const INSPECTOR_TRANSITION_MS = 200;
 
   function renderInspector() {
     inspectorEl.innerHTML = "";
-    const sel = state.sel;
-    if (!sel) { inspectorEl.classList.remove("on"); return; }
-    let content = null;
-    if (sel.type === "node" && nodeById.has(sel.id)) content = nodeInspector(nodeById.get(sel.id));
-    else if (sel.type === "edge" && edgeById.has(sel.id)) content = edgeInspector(edgeById.get(sel.id));
-    else if (sel.type === "hunk") content = hunkInspector(sel.id);
-    else if (sel.type === "findings") content = findingsInspector(sel.id);
-    if (!content) { inspectorEl.classList.remove("on"); return; }
+
+    const content = inspectorContent(state.selection);
+
+    if (!content) {
+      inspectorEl.classList.remove("on");
+
+      return;
+    }
+
     inspectorEl.classList.add("on");
     inspectorEl.append(inspectorHandle, ...content);
-    setTimeout(() => overlay && overlay.__sync && overlay.__sync(), 200);
+    // Re-place the overlay labels once the graph has been resized for the inspector.
+    setTimeout(requestOverlaySync, INSPECTOR_TRANSITION_MS);
   }
 
-  function insHead(iconName, iconCls, title, sub, badges) {
-    return h("div", { class: "ins-head" },
-      h("div", { class: "ins-icon " + (iconCls || ""), html: icon(iconName, "lg") }),
-      h("div", { class: "ins-title" }, h("h2", null, title), sub ? h("div", { class: "sub" }, sub) : null, badges ? h("div", { class: "ins-badges" }, badges) : null),
-      h("button", { class: "icon-btn", title: "Close (Esc)", html: icon("close"), onclick: () => select(null) }));
+  function inspectorHead(iconName, iconClass, title, subtitle, badges) {
+    return el("div", { class: "ins-head" },
+      el("div", { class: "ins-icon " + (iconClass || ""), html: icon(iconName, "lg") }),
+      el("div", { class: "ins-title" },
+        el("h2", null, title),
+        subtitle ? el("div", { class: "sub" }, subtitle) : null,
+        badges ? el("div", { class: "ins-badges" }, badges) : null),
+      el("button", { class: "icon-btn", title: "Close (Esc)", html: icon("close"), onclick: () => select(null) }));
   }
-  const sec = (title, iconName, ...kids) => h("section", { class: "ins-sec" }, h("h4", { html: (iconName ? icon(iconName, "sm") : "") + esc(title) }), ...kids);
 
-  function locLine(ref, res) {
+  const inspectorSection = (title, iconName, ...children) =>
+    el("section", { class: "ins-sec" }, el("h4", { html: (iconName ? icon(iconName, "sm") : "") + escapeHTML(title) }), ...children);
+
+  const READ_STATE_TITLE = {
+    final: "Read in the final state",
+    initial: "Read in the initial state (deleted node)",
+    at: "Read at an intermediate commit",
+  };
+  const READ_STATE_PREFIX = { initial: "initial ", at: "at " };
+
+  // Where a ref points, and which state of the repo it was read in.
+  function locationLine(ref, result) {
     if (!ref) return null;
+
     const repo = repoById.get(ref.repo);
-    return h("div", { class: "loc" },
-      h("span", { class: "repo" }, ref.repo), h("span", { class: "sep" }, "›"),
-      ref.type === "commit" ? h("span", null, "commit " + short(ref.sha)) : h("span", null, ref.file + linesText(ref)),
-      h("span", { class: "badge mono", title: "Reference type" }, ref.type),
-      res && res.state ? h("span", { class: "badge mono", title: { final: "Read in the final state", initial: "Read in the initial state (deleted node)", at: "Read at an intermediate commit" }[res.stateKind] }, (res.stateKind === "initial" ? "initial " : res.stateKind === "at" ? "at " : "") + short(res.state)) : null,
-      repo && repo.role === "context" ? h("span", { class: "badge context" }, "context repo") : null);
+
+    return el("div", { class: "loc" },
+      el("span", { class: "repo" }, ref.repo),
+      el("span", { class: "sep" }, "›"),
+      ref.type === "commit" ? el("span", null, "commit " + shortSha(ref.sha)) : el("span", null, ref.file + linesText(ref)),
+      el("span", { class: "badge mono", title: "Reference type" }, ref.type),
+      result && result.state
+        ? el("span", { class: "badge mono", title: READ_STATE_TITLE[result.stateKind] }, (READ_STATE_PREFIX[result.stateKind] || "") + shortSha(result.state))
+        : null,
+      repo && repo.role === "context" ? el("span", { class: "badge context" }, "context repo") : null);
   }
 
+  // Findings whose JSON path is the element's path or inside it.
   function elementFindings(path) {
-    return allFindings.filter((f) => f.path && (f.path === path || f.path.startsWith(path + "/")));
+    return allFindings.filter((finding) => finding.path && (finding.path === path || finding.path.startsWith(path + "/")));
   }
 
-  function nodeInspector(n) {
-    const out = [insHead(kindIcon(n.kind), n.change, n.label, `${n.id} · ${n.kind}`, [changeBadge(n.change), statusBadge(n.result.status)])];
-    const body = h("div", { class: "ins-body" });
-    out.push(body);
+  function agentAccountSection(node) {
+    const hasMeta = node.meta && node.meta.length;
 
-    if (n.result.status === "contradicted" || n.result.status === "unresolved") body.appendChild(h("div", { class: "ins-sec" }, reasonCallout(n.result)));
-    if (n.result.status === "agent") body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "callout info", html: icon("chat") }, h("div", null, "This node has no reference. Its existence and change state are the agent's word."))));
+    if (!node.why && !hasMeta) return null;
 
-    if (n.ref) body.appendChild(sec("Location", "file", locLine(n.ref, n.result)));
+    const metaEntry = (meta) => [
+      el("dt", null, meta.key),
+      el("dd", { class: "says" },
+        meta.key === "observed"
+          ? el("span", { class: "says-badge badge agent " + observedClass(meta.value) }, "agent says: " + meta.value)
+          : el("span", { class: meta.key === "command" ? "mono" : "" }, meta.value)),
+    ];
 
-    if (n.why || (n.meta && n.meta.length)) {
-      const blocks = [];
-      if (n.why) blocks.push(h("div", { class: "agent-says" }, agentTag("Why · agent says"), h("p", null, n.why)));
-      if (n.meta && n.meta.length) {
-        blocks.push(h("dl", { class: "kvs", style: { marginTop: n.why ? "10px" : 0 } }, n.meta.map((m) => [h("dt", null, m.key), h("dd", { class: "says" },
-          m.key === "observed" ? h("span", { class: "says-badge badge agent " + observedClass(m.value) }, "agent says: " + m.value) : h("span", { class: m.key === "command" ? "mono" : "" }, m.value))])));
-      }
-      body.appendChild(sec("Agent's account", "chat", ...blocks));
-    }
-
-    const finds = elementFindings(`/nodes/${n.index}`).filter((f) => !(f.status && f.path.endsWith("/ref") && n.result.codes && n.result.reason === f.message));
-    const nodeFinds = finds.filter((f) => f.level === "warning" || !f.status);
-    if (nodeFinds.length) body.appendChild(sec("Findings", "alert", h("div", { class: "flist" }, nodeFinds.map((f) => findingItem(f, false)))));
-
-    if (n.kind !== "test") {
-      const tests = testsOf(n.id);
-      body.appendChild(sec(`Tests (${tests.length})`, "test",
-        tests.length ? h("div", { class: "rel" }, tests.map((e) => {
-          const t = nodeById.get(e.from);
-          const obs = t.meta && t.meta.find((m) => m.key === "observed");
-          return h("div", { class: "rel-row", onclick: () => select({ type: "node", id: t.id }) },
-            h("span", { class: "sdot " + t.result.status, title: "Test node: " + STATUS_LABEL[t.result.status] }),
-            h("span", null, t.label),
-            h("span", { class: "badge " + t.change }, CHANGE_LABEL[t.change]),
-            obs ? h("span", { class: "badge agent " + observedClass(obs.value) }, "agent says: " + obs.value) : null,
-            h("span", { class: "where" }, t.ref ? basename(t.ref.file || "") + linesText(t.ref) : ""));
-        })) : h("div", { class: "muted", style: { fontSize: "12.5px" } }, n.change === "unchanged" ? "No tests attached." : "No test node has a `tests` edge to this node.")));
-    } else {
-      const targets = testedBy(n.id);
-      body.appendChild(sec(`Tests (${targets.length})`, "target",
-        targets.length ? h("div", { class: "rel" }, targets.map((e) => relRow(e, "out"))) : h("div", { class: "muted" }, "No `tests` edges from this test.")));
-    }
-
-    const ins = (inEdges.get(n.id) || []).filter((e) => !(n.kind !== "test" && e.kind === "tests"));
-    const outs = (outEdges.get(n.id) || []).filter((e) => !(n.kind === "test" && e.kind === "tests"));
-    if (ins.length || outs.length) {
-      body.appendChild(sec("Relations", "graph", h("div", { class: "rel" }, ins.map((e) => relRow(e, "in")), outs.map((e) => relRow(e, "out")))));
-    }
-
-    if (n.excerpt) body.appendChild(sec(n.change === "deleted" ? "Code (initial state)" : "Code", "code", excerptBox(n.excerpt, n.ref, { actualLine: n.result.actualLine })));
-    return out;
+    return inspectorSection("Agent's account", "chat",
+      node.why ? el("div", { class: "agent-says" }, agentTag("Why · agent says"), el("p", null, node.why)) : null,
+      hasMeta ? el("dl", { class: "kvs", style: { marginTop: node.why ? "10px" : 0 } }, node.meta.map(metaEntry)) : null);
   }
 
-  function relRow(e, dir) {
-    const other = nodeById.get(dir === "in" ? e.from : e.to);
-    return h("div", { class: "rel-row", onclick: () => select({ type: "edge", id: e.id }), title: STATUS_LABEL[e.result.status] },
-      h("span", { class: "sdot " + e.result.status }),
-      h("span", { class: "dir", title: dir === "in" ? "incoming" : "outgoing" }, dir === "in" ? "←" : "→"),
-      h("span", { class: "k" }, e.kind),
-      h("span", { class: "other", title: other.label }, other.label),
-      h("span", { class: "where" }, e.ref ? basename(e.ref.file || "") + linesText(e.ref) : "no ref"));
+  function testRow(test) {
+    return el("div", { class: "rel-row", onclick: () => select({ type: "node", id: test.id }) },
+      el("span", { class: "sdot " + test.result.status, title: "Test node: " + STATUS_LABEL[test.result.status] }),
+      el("span", null, test.label),
+      el("span", { class: "badge " + test.change }, CHANGE_LABEL[test.change]),
+      observedBadge(test),
+      el("span", { class: "where" }, test.ref ? basename(test.ref.file || "") + linesText(test.ref) : ""));
   }
 
-  function edgeInspector(e) {
-    const a = nodeById.get(e.from), b = nodeById.get(e.to);
-    const out = [insHead("arrow", "", `${a.label} → ${b.label}`, `edge · ${e.kind}`, [h("span", { class: "badge mono" }, e.kind), statusBadge(e.result.status)])];
-    const body = h("div", { class: "ins-body" });
-    out.push(body);
-    if (e.result.status === "contradicted" || e.result.status === "unresolved") body.appendChild(h("div", { class: "ins-sec" }, reasonCallout(e.result)));
-    if (!e.ref) body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "callout info", html: icon("chat") }, h("div", null, "No site reference: this relation is the agent's word, drawn dotted."))));
-    body.appendChild(sec("Between", "graph", h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, nodeChip(a), h("span", { class: "muted" }, e.kind + " →"), nodeChip(b))));
-    if (e.ref) {
-      body.appendChild(sec("Site", "target", locLine(e.ref, e.result),
-        e.ref.contains ? h("div", { style: { marginTop: "8px" } }, h("span", { class: "muted", style: { fontSize: "12px" } }, "contains "), h("code", { class: "ev-contains" }, e.ref.contains)) : null));
-      const warn = allFindings.filter((f) => f.path === `/edges/${e.id.slice(1)}/ref` && f.level === "warning");
-      if (warn.length) body.appendChild(sec("Findings", "alert", h("div", { class: "flist" }, warn.map((f) => findingItem(f, false)))));
-      if (e.excerpt) body.appendChild(sec("Code", "code", excerptBox(e.excerpt, e.ref, { actualLine: e.result.actualLine })));
+  // The tests of a code node, or for a test node the nodes it tests.
+  function testsSection(node) {
+    if (node.kind === "test") {
+      const targets = testedBy(node.id);
+
+      return inspectorSection(`Tests (${targets.length})`, "target",
+        targets.length
+          ? el("div", { class: "rel" }, targets.map((edge) => relationRow(edge, "out")))
+          : el("div", { class: "muted" }, "No `tests` edges from this test."));
     }
-    return out;
+
+    const tests = testsOf(node.id);
+    const emptyNote = node.change === "unchanged" ? "No tests attached." : "No test node has a `tests` edge to this node.";
+
+    return inspectorSection(`Tests (${tests.length})`, "test",
+      tests.length
+        ? el("div", { class: "rel" }, tests.map((edge) => testRow(nodeById.get(edge.from))))
+        : el("div", { class: "muted", style: { fontSize: "12.5px" } }, emptyNote));
   }
+
+  function nodeInspector(node) {
+    const status = node.result.status;
+    const head = inspectorHead(kindIcon(node.kind), node.change, node.label, `${node.id} · ${node.kind}`, [changeBadge(node.change), statusBadge(status)]);
+    const body = el("div", { class: "ins-body" });
+
+    if (isProblemStatus(status)) body.appendChild(el("div", { class: "ins-sec" }, reasonCallout(node.result)));
+    if (status === "agent") {
+      body.appendChild(el("div", { class: "ins-sec" },
+        el("div", { class: "callout info", html: icon("chat") },
+          el("div", null, "This node has no reference. Its existence and change state are the agent's word."))));
+    }
+
+    if (node.ref) body.appendChild(inspectorSection("Location", "file", locationLine(node.ref, node.result)));
+
+    const account = agentAccountSection(node);
+
+    if (account) body.appendChild(account);
+
+    // A ref finding that repeats the node's result is already shown in the callout.
+    const repeatsRefResult = (finding) => finding.status && finding.path.endsWith("/ref") && node.result.codes && node.result.reason === finding.message;
+    const nodeFindings = elementFindings(`/nodes/${nodeIndex.get(node.id)}`)
+      .filter((finding) => !repeatsRefResult(finding))
+      .filter((finding) => finding.level === "warning" || !finding.status);
+
+    if (nodeFindings.length) {
+      body.appendChild(inspectorSection("Findings", "alert", el("div", { class: "flist" }, nodeFindings.map((finding) => findingItem(finding, false)))));
+    }
+
+    body.appendChild(testsSection(node));
+
+    // `tests` edges are listed in the Tests section, not again as relations.
+    const isTest = node.kind === "test";
+    const incoming = incomingEdges(node.id).filter((edge) => isTest || edge.kind !== "tests");
+    const outgoing = outgoingEdges(node.id).filter((edge) => !isTest || edge.kind !== "tests");
+
+    if (incoming.length || outgoing.length) {
+      body.appendChild(inspectorSection("Relations", "graph",
+        el("div", { class: "rel" }, incoming.map((edge) => relationRow(edge, "in")), outgoing.map((edge) => relationRow(edge, "out")))));
+    }
+
+    if (node.excerpt) {
+      body.appendChild(inspectorSection(node.change === "deleted" ? "Code (initial state)" : "Code", "code",
+        excerptBox(node.excerpt, node.ref, { actualLine: node.result.actualLine })));
+    }
+
+    return [head, body];
+  }
+
+  // direction: "in" for an edge into the inspected node, "out" for one leaving it.
+  function relationRow(edge, direction) {
+    const isIncoming = direction === "in";
+    const other = nodeById.get(isIncoming ? edge.from : edge.to);
+
+    return el("div", { class: "rel-row", onclick: () => select({ type: "edge", id: edge.id }), title: STATUS_LABEL[edge.result.status] },
+      el("span", { class: "sdot " + edge.result.status }),
+      el("span", { class: "dir", title: isIncoming ? "incoming" : "outgoing" }, isIncoming ? "←" : "→"),
+      el("span", { class: "k" }, edge.kind),
+      el("span", { class: "other", title: other.label }, other.label),
+      el("span", { class: "where" }, edge.ref ? basename(edge.ref.file || "") + linesText(edge.ref) : "no ref"));
+  }
+
+  function edgeInspector(edge) {
+    const fromNode = nodeById.get(edge.from);
+    const toNode = nodeById.get(edge.to);
+    const head = inspectorHead("arrow", "", `${fromNode.label} → ${toNode.label}`, `edge · ${edge.kind}`, [
+      el("span", { class: "badge mono" }, edge.kind),
+      statusBadge(edge.result.status),
+    ]);
+    const body = el("div", { class: "ins-body" });
+
+    if (isProblemStatus(edge.result.status)) body.appendChild(el("div", { class: "ins-sec" }, reasonCallout(edge.result)));
+    if (!edge.ref) {
+      body.appendChild(el("div", { class: "ins-sec" },
+        el("div", { class: "callout info", html: icon("chat") },
+          el("div", null, "No site reference: this relation is the agent's word, drawn dotted."))));
+    }
+    body.appendChild(inspectorSection("Between", "graph",
+      el("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
+        nodeChip(fromNode),
+        el("span", { class: "muted" }, edge.kind + " →"),
+        nodeChip(toNode))));
+
+    if (!edge.ref) return [head, body];
+
+    body.appendChild(inspectorSection("Site", "target", locationLine(edge.ref, edge.result),
+      edge.ref.contains
+        ? el("div", { style: { marginTop: "8px" } }, el("span", { class: "muted", style: { fontSize: "12px" } }, "contains "), el("code", { class: "ev-contains" }, edge.ref.contains))
+        : null));
+
+    // Edge ids are "e" plus the edge's index in the review file.
+    const warnings = allFindings.filter((finding) => finding.path === `/edges/${edge.id.slice(1)}/ref` && finding.level === "warning");
+
+    if (warnings.length) {
+      body.appendChild(inspectorSection("Findings", "alert", el("div", { class: "flist" }, warnings.map((finding) => findingItem(finding, false)))));
+    }
+    if (edge.excerpt) body.appendChild(inspectorSection("Code", "code", excerptBox(edge.excerpt, edge.ref, { actualLine: edge.result.actualLine })));
+
+    return [head, body];
+  }
+
+  const HUNK_INSPECTOR_LABEL = { covered: "Covered", partial: "Partly covered", uncovered: "Unmentioned" };
 
   function hunkInspector(id) {
-    for (const f of D.files) {
-      const hk = f.hunks.find((x) => x.id === id);
-      if (!hk) continue;
-      const out = [insHead("diff", f.status, basename(f.path), `${f.repo} › ${f.path}`, [changeBadge(f.status), h("span", { class: "badge " + ({ covered: "verified", partial: "unresolved", uncovered: "contradicted" }[hk.coverage]) }, { covered: "Covered", partial: "Partly covered", uncovered: "Unmentioned" }[hk.coverage])])];
-      const body = h("div", { class: "ins-body" });
-      out.push(body);
-      if (hk.coverage !== "covered") {
-        body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "callout " + (hk.coverage === "uncovered" ? "bad" : "warn"), html: icon("alert") },
-          h("div", null, hk.coverage === "uncovered" ? "No node's range or file ref covers this change. The agent did not describe it." : `Lines ${hk.uncovered.map((r) => (r[0] === r[1] ? r[0] : r[0] + "–" + r[1])).join(", ")} are outside every node.`))));
-      }
-      body.appendChild(sec("Hunk", "diff", h("div", { class: "loc" }, h("span", { class: "repo" }, f.repo), h("span", { class: "sep" }, "›"), h("span", null, f.path), h("span", { class: "badge mono" }, hunkRange(f, hk)))));
-      if (hk.nodes.length) body.appendChild(sec("Covered by", "layers", h("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } }, hk.nodes.map((nid) => nodeChip(nodeById.get(nid))))));
-      body.appendChild(sec("Change", "code", h("div", { class: "code-box" }, codeTable(hk.rows, null))));
-      return out;
+    const file = reviewData.files.find((candidate) => candidate.hunks.some((hunk) => hunk.id === id));
+
+    if (!file) return null;
+
+    const hunk = file.hunks.find((candidate) => candidate.id === id);
+    const head = inspectorHead("diff", file.status, basename(file.path), `${file.repo} › ${file.path}`, [
+      changeBadge(file.status),
+      el("span", { class: "badge " + COVERAGE_BADGE[hunk.coverage] }, HUNK_INSPECTOR_LABEL[hunk.coverage]),
+    ]);
+    const body = el("div", { class: "ins-body" });
+
+    if (hunk.coverage !== "covered") {
+      const isUncovered = hunk.coverage === "uncovered";
+      const message = isUncovered
+        ? "No node's range or file ref covers this change. The agent did not describe it."
+        : `Lines ${rangesText(hunk.uncovered)} are outside every node.`;
+
+      body.appendChild(el("div", { class: "ins-sec" }, el("div", { class: "callout " + (isUncovered ? "bad" : "warn"), html: icon("alert") }, el("div", null, message))));
     }
-    return null;
+    body.appendChild(inspectorSection("Hunk", "diff",
+      el("div", { class: "loc" },
+        el("span", { class: "repo" }, file.repo),
+        el("span", { class: "sep" }, "›"),
+        el("span", null, file.path),
+        el("span", { class: "badge mono" }, hunkRange(hunk)))));
+    if (hunk.nodes.length) {
+      body.appendChild(inspectorSection("Covered by", "layers",
+        el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } }, hunk.nodes.map((nodeId) => nodeChip(nodeById.get(nodeId))))));
+    }
+    body.appendChild(inspectorSection("Change", "code", el("div", { class: "code-box" }, codeTable(hunk.rows, null))));
+
+    return [head, body];
   }
 
   function openFindings(group) {
     select({ type: "findings", id: group });
   }
 
+  // The title and findings for a group id from the topbar pills or the sidebar.
+  function findingsOfGroup(group) {
+    if (group === "errors") return { title: "Errors", findings: allFindings.filter((finding) => finding.level === "error") };
+    if (group === "warnings") return { title: "Warnings", findings: allFindings.filter((finding) => finding.level === "warning") };
+    if (group === "all") return { title: "All findings", findings: allFindings };
+
+    const findingGroup = FINDING_GROUPS.find((candidate) => candidate.id === group);
+
+    return findingGroup ? { title: findingGroup.label, findings: allFindings.filter(findingGroup.match) } : null;
+  }
+
   function findingsInspector(group) {
-    let list, title;
-    if (group === "errors") { list = allFindings.filter((f) => f.level === "error"); title = "Errors"; }
-    else if (group === "warnings") { list = allFindings.filter((f) => f.level === "warning"); title = "Warnings"; }
-    else if (group === "all") { list = allFindings; title = "All findings"; }
-    else if (group === "tests") return changedTestsInspector();
-    else {
-      const g = GROUPS.find((x) => x.id === group);
-      if (!g) return null;
-      list = allFindings.filter(g.match);
-      title = g.label;
-    }
-    const out = [insHead("alert", "", title, `${plural(list.length, "finding")} from validate`, null)];
-    const body = h("div", { class: "ins-body" });
-    out.push(body);
-    if (!list.length) body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "all-clear", html: icon("checkcircle") + "Nothing here." })));
-    else body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "flist" }, list.map((f) => findingItem(f, true)))));
-    body.appendChild(h("div", { class: "ins-sec muted", style: { fontSize: "12px" } }, "Findings check the account against the repos, never whether the code is correct. Hints are written for the agent."));
-    return out;
+    if (group === "tests") return changedTestsInspector();
+
+    const selected = findingsOfGroup(group);
+
+    if (!selected) return null;
+
+    const { title, findings } = selected;
+    const head = inspectorHead("alert", "", title, `${plural(findings.length, "finding")} from validate`, null);
+    const list = findings.length
+      ? el("div", { class: "flist" }, findings.map((finding) => findingItem(finding, true)))
+      : el("div", { class: "all-clear", html: icon("checkcircle") + "Nothing here." });
+    const body = el("div", { class: "ins-body" },
+      el("div", { class: "ins-sec" }, list),
+      el("div", { class: "ins-sec muted", style: { fontSize: "12px" } },
+        "Findings check the account against the repos, never whether the code is correct. Hints are written for the agent."));
+
+    return [head, body];
   }
 
   function changedTestsInspector() {
-    const tests = changedTests();
-    const out = [insHead("test", "", "Changed tests", "Test nodes that changed in the diff, next to the code they claim to test", null)];
-    const body = h("div", { class: "ins-body" });
-    out.push(body);
-    body.appendChild(h("div", { class: "ins-sec" }, h("div", { class: "rel" }, tests.map((t) => {
-      const targets = testedBy(t.id).map((e) => nodeById.get(e.to));
-      const obs = t.meta && t.meta.find((m) => m.key === "observed");
-      return h("div", { class: "rel-row", style: { flexWrap: "wrap" }, onclick: () => select({ type: "node", id: t.id }) },
-        h("span", { class: "sdot " + t.result.status }), h("b", null, t.label), h("span", { class: "badge " + t.change }, CHANGE_LABEL[t.change]),
-        obs ? h("span", { class: "badge agent " + observedClass(obs.value) }, "agent says: " + obs.value) : null,
-        h("span", { class: "where" }, targets.length ? "tests " + targets.map((x) => x.label).join(", ") : "tests nothing"));
-    }))));
-    return out;
+    const head = inspectorHead("test", "", "Changed tests", "Test nodes that changed in the diff, next to the code they claim to test", null);
+    const rows = changedTests().map((test) => {
+      const targets = testedBy(test.id).map((edge) => nodeById.get(edge.to));
+
+      return el("div", { class: "rel-row", style: { flexWrap: "wrap" }, onclick: () => select({ type: "node", id: test.id }) },
+        el("span", { class: "sdot " + test.result.status }),
+        el("b", null, test.label),
+        el("span", { class: "badge " + test.change }, CHANGE_LABEL[test.change]),
+        observedBadge(test),
+        el("span", { class: "where" }, targets.length ? "tests " + targets.map((target) => target.label).join(", ") : "tests nothing"));
+    });
+    const body = el("div", { class: "ins-body" }, el("div", { class: "ins-sec" }, el("div", { class: "rel" }, rows)));
+
+    return [head, body];
   }
 
-  function findingTarget(f) {
-    const m = f.path && f.path.match(/^\/(nodes|edges|claims)\/(\d+)/);
-    if (m) {
-      if (m[1] === "nodes") return { label: "Show node", go: () => { const n = D.nodes[+m[2]]; if (state.view === "diff" || state.view === "claims") setView("graph"); select({ type: "node", id: n.id }); } };
-      if (m[1] === "edges") return { label: "Show edge", go: () => { if (state.view !== "graph" && state.view !== "flows") setView("graph"); select({ type: "edge", id: "e" + m[2] }); } };
-      if (m[1] === "claims") return { label: "Show claim", go: () => { state.claimFilter = "all"; state.openFiles.add(`ev:${m[2]}:0`); setView("claims"); renderView(); } };
-    }
-    if (f.repo && f.file) {
-      const file = D.files.find((x) => x.repo === f.repo && x.path === f.file);
-      if (file) {
-        let hk = null;
-        if (f.lines) hk = file.hunks.find((x) => {
-          const s = x.newCount ? x.newStart : x.oldStart, e = x.newCount ? x.newStart + x.newCount - 1 : x.oldStart + x.oldCount - 1;
-          const a = x.oldSide ? x.oldStart : s, b = x.oldSide ? x.oldStart + x.oldCount - 1 : e;
-          return f.lines[0] <= b && f.lines[1] >= a;
-        });
-        return { label: "Show in diff map", go: () => {
-          state.openFiles.add(file.id);
-          state.diffFilter = "all";
-          if (state.view !== "diff") setView("diff"); else renderView();
-          setTimeout(() => {
-            const el = hk && document.getElementById("hunk-" + hk.id);
-            if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.animate([{ outline: "2px solid var(--accent)" }, { outline: "2px solid transparent" }], { duration: 1600 }); }
-          }, 30);
-        } };
-      }
-    }
-    return null;
+  // The line range a hunk spans: initial-state lines for removals and old-side hunks.
+  function hunkLines(hunk) {
+    if (hunk.oldSide || !hunk.newCount) return [hunk.oldStart, hunk.oldStart + hunk.oldCount - 1];
+
+    return [hunk.newStart, hunk.newStart + hunk.newCount - 1];
   }
 
-  function findingItem(f, withGo) {
-    const where = [f.path, f.repo && f.file ? `${f.repo} › ${f.file}${f.lines ? ":" + (f.lines[0] === f.lines[1] ? f.lines[0] : f.lines[0] + "–" + f.lines[1]) : ""}` : f.repo].filter(Boolean).join("  ");
-    const target = withGo && findingTarget(f);
-    return h("div", { class: "fitem " + (f.level === "error" ? "err" : "warn") },
-      h("div", { class: "top" }, h("span", { class: "code-n" }, f.code), f.status ? statusBadge(f.status) : null, h("span", { class: "where" }, where)),
-      h("div", { class: "msg" }, f.message),
-      f.hint ? h("div", { class: "hint" }, "Hint: ", f.hint) : null,
-      target ? h("div", { class: "go" }, h("button", { class: "link", onclick: target.go }, target.label + " →")) : null);
+  const HUNK_SCROLL_DELAY_MS = 30;
+  const HUNK_FLASH_MS = 1600;
+
+  // Opens the file in the diff map and scrolls to the hunk (if any), flashing it.
+  function showHunk(file, hunk) {
+    state.openFiles.add(file.id);
+    state.diffFilter = "all";
+    showDiffMap();
+    setTimeout(() => {
+      const hunkEl = hunk && document.getElementById("hunk-" + hunk.id);
+
+      if (!hunkEl) return;
+
+      hunkEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      hunkEl.animate([{ outline: "2px solid var(--accent)" }, { outline: "2px solid transparent" }], { duration: HUNK_FLASH_MS });
+    }, HUNK_SCROLL_DELAY_MS);
+  }
+
+  // The "Show …" action for a finding at /<collection>/<index> in the review file.
+  function pathTarget(collection, index) {
+    if (collection === "nodes") {
+      return {
+        label: "Show node",
+        go: () => {
+          const node = reviewData.nodes[+index];
+
+          if (state.view === "diff" || state.view === "claims") setView("graph");
+          select({ type: "node", id: node.id });
+        },
+      };
+    }
+    if (collection === "edges") {
+      return {
+        label: "Show edge",
+        go: () => {
+          if (state.view !== "graph" && state.view !== "flows") setView("graph");
+          select({ type: "edge", id: "e" + index });
+        },
+      };
+    }
+
+    return {
+      label: "Show claim",
+      go: () => {
+        state.claimFilter = "all";
+        state.openFiles.add(`ev:${index}:0`);
+        setView("claims");
+        renderView();
+      },
+    };
+  }
+
+  // The "Show …" action for a finding: its element in the review file, or its file in the diff map.
+  function findingTarget(finding) {
+    const match = finding.path && finding.path.match(/^\/(nodes|edges|claims)\/(\d+)/);
+
+    if (match) return pathTarget(match[1], match[2]);
+    if (!finding.repo || !finding.file) return null;
+
+    const file = reviewData.files.find((candidate) => candidate.repo === finding.repo && candidate.path === finding.file);
+
+    if (!file) return null;
+
+    const overlapsFinding = (hunk) => {
+      const [start, end] = hunkLines(hunk);
+
+      return finding.lines[0] <= end && finding.lines[1] >= start;
+    };
+    const hunk = finding.lines ? file.hunks.find(overlapsFinding) : null;
+
+    return { label: "Show in diff map", go: () => showHunk(file, hunk) };
+  }
+
+  // withGo adds the "Show …" link; element inspectors leave it out.
+  function findingItem(finding, withGo) {
+    const fileLocation = finding.repo && finding.file
+      ? `${finding.repo} › ${finding.file}${finding.lines ? ":" + rangeText(finding.lines) : ""}`
+      : finding.repo;
+    const where = [finding.path, fileLocation].filter(Boolean).join("  ");
+    const target = withGo && findingTarget(finding);
+
+    return el("div", { class: "fitem " + (finding.level === "error" ? "err" : "warn") },
+      el("div", { class: "top" },
+        el("span", { class: "code-n" }, finding.code),
+        finding.status ? statusBadge(finding.status) : null,
+        el("span", { class: "where" }, where)),
+      el("div", { class: "msg" }, finding.message),
+      finding.hint ? el("div", { class: "hint" }, "Hint: ", finding.hint) : null,
+      target ? el("div", { class: "go" }, el("button", { class: "link", onclick: target.go }, target.label + " →")) : null);
   }
 
   // ── Keyboard ───────────────────────────────────────────────
-  document.addEventListener("keydown", (ev) => {
-    if (ev.target.closest && ev.target.closest("input, textarea, select")) return;
-    if (ev.key === "Escape") select(null);
-    if (ev.key === "[" && !ev.metaKey && !ev.ctrlKey) toggleSidebar();
-    if (ev.key === "/" && state.view === "graph") { const s = document.querySelector(".search"); if (s) { ev.preventDefault(); s.focus(); } }
-    const i = ["1", "2", "3", "4"].indexOf(ev.key);
-    if (i >= 0 && !ev.metaKey && !ev.ctrlKey) setView(VIEWS[i].id);
+  const VIEW_KEYS = ["1", "2", "3", "4"];
+
+  document.addEventListener("keydown", (event) => {
+    const isTyping = event.target.closest && event.target.closest("input, textarea, select");
+
+    if (isTyping) return;
+
+    const isPlainKey = !event.metaKey && !event.ctrlKey;
+
+    if (event.key === "Escape") select(null);
+    if (event.key === "[" && isPlainKey) toggleSidebar();
+    if (event.key === "/" && state.view === "graph") {
+      const search = document.querySelector(".search");
+
+      if (search) {
+        event.preventDefault();
+        search.focus();
+      }
+    }
+
+    const viewIndex = VIEW_KEYS.indexOf(event.key);
+
+    if (viewIndex >= 0 && isPlainKey) setView(VIEWS[viewIndex].id);
   });
 
-  const mq = matchMedia("(prefers-color-scheme: dark)");
-  mq.addEventListener && mq.addEventListener("change", () => { if (state.theme === "auto" && state.view === "graph") renderView(); });
+  // Graph colours are read from CSS variables, so an OS theme switch needs a redraw.
+  const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+
+  if (darkScheme.addEventListener) {
+    darkScheme.addEventListener("change", () => {
+      if (state.theme === "auto" && state.view === "graph") renderView();
+    });
+  }
 
   readHash();
-  revealInGraph(state.sel);
+  revealInGraph(state.selection);
   render();
 })();
