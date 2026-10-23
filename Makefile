@@ -1,6 +1,7 @@
-.PHONY: build install test vet golden release clean
+.PHONY: build install test vet lint check golden release clean
 
 VERSION ?= 0.1.0
+ESLINT := npx --yes eslint@10.12.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 build:
@@ -15,6 +16,13 @@ test:
 vet:
 	go vet ./...
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+# Code rules from AGENTS.md: golangci-lint for Go, core ESLint rules for app.js.
+lint:
+	golangci-lint run ./...
+	$(ESLINT) -c eslint.config.mjs internal/render/assets/app.js
+
+check: vet lint test
 
 golden:
 	go test ./cmd/change-view -run TestValidReviewGolden -update

@@ -92,7 +92,10 @@ dark.
 ```bash
 make test    # unit tests and golden tests on generated fixture repos
 make build   # bin/change-view
+make check   # vet, lint (golangci-lint, ESLint via npx) and test
 ```
+
+Code rules and package boundaries are in [AGENTS.md](AGENTS.md).
 
 Layout: `cmd/change-view` (CLI), `internal/review` (model, embedded JSON
 Schema, structural rules), `internal/engine` (Git states, diff, reference and
