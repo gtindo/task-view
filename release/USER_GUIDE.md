@@ -169,7 +169,6 @@ test result is always the agent's word.
 | Contradicted or unresolved references | The account is wrong somewhere: send it back to the agent |
 | Unmentioned changes | Lines changed that no node describes: the agent didn't tell you about them |
 | Unreferenced test code | Test-file changes outside every test case the agent listed (an edited assertion, a helper) |
-| Untested changed nodes | Changed source code with no test linked to it; the agent's notes should say why. Docs, data, config and binary files are not checked |
 | Work outside the review | Uncommitted files or later commits that this review does not cover |
 | Unlisted repos | Only with `--scan-siblings`: neighbouring repos with uncommitted changes that the review doesn't list. Usually unrelated; check if the change could have touched them |
 

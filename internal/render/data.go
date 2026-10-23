@@ -155,7 +155,6 @@ type viewData struct {
 	Warnings   []review.Finding      `json:"warnings"`
 	Counts     engine.Summary        `json:"counts"`
 	Unlisted   []engine.UnlistedRepo `json:"unlisted"`
-	Untested   []string              `json:"untested"`
 }
 
 const ctxLines = 3
@@ -175,7 +174,7 @@ func build(e *engine.Engine, version string) *viewData {
 		Version: version, Generated: time.Now().Format(time.RFC3339),
 		ReviewPath: e.ReviewPath, ReviewName: filepath.Base(e.ReviewPath), ExitCode: e.ExitCode,
 		Summary: r.Summary, Notes: nonNil(r.Notes), Flows: r.Flows,
-		Errors: errs, Warnings: warns, Counts: e.Summary, Unlisted: e.Unlisted, Untested: nonNil(e.Untested),
+		Errors: errs, Warnings: warns, Counts: e.Summary, Unlisted: e.Unlisted,
 		Excerpts: b.excerpts,
 	}
 	if d.Flows == nil {

@@ -97,7 +97,7 @@ Only the listed repos are read. `--scan-siblings` opts in to the unlisted-repo c
 | 2 | Schema invalid or file unreadable; reference checks not run |
 | 3 | Environment error: repo path missing, not a Git repo, `git` not found |
 
-Every error and warning carries a stable `code` from the code catalog, a JSON Pointer `path` into the review file when it concerns one element, and a `hint` written for an agent to act on. Diff-level findings (unmentioned hunks, unlisted repos, untested changed nodes) are warnings: the agent should fix them, but they never change the exit code, and `open` shows whatever remains so the reviewer sees what the account left out.
+Every error and warning carries a stable `code` from the code catalog, a JSON Pointer `path` into the review file when it concerns one element, and a `hint` written for an agent to act on. Diff-level findings (unmentioned hunks, unlisted repos, unreferenced test code) are warnings: the agent should fix them, but they never change the exit code, and `open` shows whatever remains so the reviewer sees what the account left out.
 
 ### Implementation notes
 
@@ -126,7 +126,7 @@ The input is one JSON file describing the change as a small graph plus flows and
 | `claims[]` | `{ text, about: [id...], evidence: [ref...] }`: statements such as "the mock response now has a discount field" |
 | `notes[]` | Free text the agent wants the reviewer to see: doubts, shortcuts, things not done |
 
-`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the untested-changes check and the graph's test toggle) and `doc`/`docs` (the graph's doc toggle).
+`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the test-code checks and the graph's test toggle) and `doc`/`docs` (the graph's doc toggle).
 
 ### Languages
 
@@ -264,7 +264,6 @@ These run regardless of what the agent wrote and are shown at the top of every v
 - **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file` or `range`. Listed per file with line counts.
 - **Unlisted repos** (only with `--scan-siblings`): sibling repos (same parent folders as listed repos, one level deep) with uncommitted changes that are not in `repos[]`.
 - **Changed tests:** files the agent marked as `test` nodes that changed in the diff, shown next to the code they claim to test.
-- **Untested changed nodes:** changed non-test nodes with no `tests` edge from a test node whose ref is Verified. Nodes on non-source files are skipped: binary files, and files whose language is documentation, data or configuration (`markdown`, `restructuredtext`, `plaintext`, `org`, `tex`, `bibtex`, `groff`, `csv`, `json`, `yaml`, `toml`, `ini`, `properties`, `xml`, `diff`, `reg`).
 - **Changed but unreferenced test code:** hunks in files that hold test nodes but fall outside every test node's range (for example an edited assertion the agent didn't mention).
 
 ### What the visualizer never checks
@@ -303,7 +302,6 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 | `site_offset` | Warning | `contains` found up to 2 lines from `line`; hint gives the actual line |
 | `unmentioned_hunk` | Warning | Changed lines covered by no node |
 | `unreferenced_test_hunk` | Warning | Changed lines in a test file outside every test node |
-| `untested_change` | Warning | Changed non-test node on source code with no `tests` edge from a verified test node |
 | `unlisted_repo` | Warning | Sibling repo with uncommitted changes not in `repos`; only with `--scan-siblings` |
 | `uncommitted_changes` | Warning | Listed repo has uncommitted changes but no `WORKTREE` entry |
 | `head_ahead` | Warning | Branch has commits after `commits[0]` |
@@ -317,7 +315,7 @@ One static HTML page with a fixed header and four views; verification status is 
 
 ### Header
 
-The agent's summary and each repo's commit list, then, only if the review file still has them, the remaining errors and warnings as counts that link to details: unmentioned hunks, unlisted repos, untested changed nodes, changed but unreferenced test code, contradicted references. Agent notes follow, unedited.
+The agent's summary and each repo's commit list, then, only if the review file still has them, the remaining errors and warnings as counts that link to details: unmentioned hunks, unlisted repos, changed but unreferenced test code, contradicted references. Agent notes follow, unedited.
 
 ### Views
 

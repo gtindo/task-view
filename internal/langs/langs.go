@@ -66,22 +66,6 @@ func Known(name string) bool {
 	return ok
 }
 
-// nonSource lists the languages of documentation, data and configuration
-// files: text with no behaviour of its own for a test to exercise.
-var nonSource = map[string]bool{
-	"markdown": true, "restructuredtext": true, "plaintext": true, "org mode": true,
-	"tex": true, "bibtex": true, "groff": true, "csv": true, "json": true, "yaml": true,
-	"toml": true, "ini": true, "properties": true, "xml": true, "diff": true, "reg": true,
-}
-
-// NonSource reports whether name (or an alias) is a documentation, data or
-// configuration language rather than source code.
-func NonSource(name string) bool {
-	load()
-	lx, ok := byName[strings.ToLower(name)]
-	return ok && nonSource[strings.ToLower(lx.Config().Name)]
-}
-
 // Closest returns up to n valid names nearest to name.
 func Closest(name string, n int) []string {
 	load()

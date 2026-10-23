@@ -78,7 +78,6 @@ var Catalog = map[string]CodeInfo{
 	"site_offset":            {LevelWarning, ExitOK, "", "Site offset"},
 	"unmentioned_hunk":       {LevelWarning, ExitOK, "", "Unmentioned hunk"},
 	"unreferenced_test_hunk": {LevelWarning, ExitOK, "", "Unreferenced test hunk"},
-	"untested_change":        {LevelWarning, ExitOK, "", "Untested change"},
 	"unlisted_repo":          {LevelWarning, ExitOK, "", "Unlisted repo"},
 	"uncommitted_changes":    {LevelWarning, ExitOK, "", "Uncommitted changes"},
 	"head_ahead":             {LevelWarning, ExitOK, "", "HEAD ahead"},

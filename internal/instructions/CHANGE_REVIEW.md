@@ -86,11 +86,9 @@ Add a `site` ref pointing at the line where the relation happens:
 ```
 
 `contains` is a short exact substring of that line. If you can't point at a
-line, omit `ref`; never guess. Every changed non-test node on source code
-should have at least one `tests` edge from a test node, or a note saying why
-not. Nodes on documentation, data or config files (Markdown, plain text,
-JSON, YAML, TOML, INI, XML…) or binary files need neither: the tool does not
-check them for tests, so write no notes about their tests.
+line, omit `ref`; never guess. Give each test node a `tests` edge to every
+node it exercises. A node with no `tests` edge has no test; the reviewer sees
+that, so write no notes explaining it.
 
 ## Flows
 

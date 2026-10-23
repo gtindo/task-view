@@ -78,7 +78,6 @@ type Engine struct {
 	Coverage     map[string][]*FileCoverage // by repo id
 	Unlisted     []UnlistedRepo
 	Uncommitted  map[string][]string
-	Untested     []string
 	Summary      Summary
 
 	repoByID    map[string]*RepoState
@@ -168,7 +167,6 @@ func Run(path string, opts Options) *Engine {
 	}
 
 	e.computeCoverage()
-	e.checkUntested()
 	e.checkLanguages()
 	if beforeWorktreeCheck != nil {
 		beforeWorktreeCheck()
@@ -458,43 +456,6 @@ func rangeText(r [2]int) string {
 		return fmt.Sprint(r[0])
 	}
 	return fmt.Sprintf("%d-%d", r[0], r[1])
-}
-
-// checkUntested warns on changed non-test nodes without a `tests` edge from
-// a verified test node. Nodes on non-source files (documentation, data,
-// configuration, binary assets) are skipped: there is nothing to test.
-func (e *Engine) checkUntested() {
-	tested := map[string]bool{}
-	for _, ed := range e.Review.Edges {
-		if ed.Kind != "tests" {
-			continue
-		}
-		from := e.nodeByID[ed.From]
-		if from == nil || !from.IsTest() {
-			continue
-		}
-		if e.nodeStatus(ed.From) == review.StatusVerified {
-			tested[ed.To] = true
-		}
-	}
-	for i, n := range e.Review.Nodes {
-		if n.IsTest() || !n.IsChanged() || tested[n.ID] {
-			continue
-		}
-		if n.Ref != nil {
-			if s := e.repoByID[n.Ref.Repo]; s != nil && (s.Repo.IsContext() || s.nonSource(n.Ref)) {
-				continue
-			}
-		}
-		e.Untested = append(e.Untested, n.ID)
-		f := review.NewFinding("untested_change", fmt.Sprintf("/nodes/%d", i),
-			fmt.Sprintf("changed node %q has no `tests` edge from a test node whose reference is verified (the test exists as described; whether it passed is never checked)", n.ID),
-			"add a test node and a `tests` edge to this node, or say in notes why it is not tested")
-		if n.Ref != nil {
-			f.Repo, f.File = n.Ref.Repo, n.Ref.File
-		}
-		e.Findings = append(e.Findings, f)
-	}
 }
 
 func (e *Engine) nodeStatus(id string) string {

@@ -124,7 +124,6 @@ func TestCodes(t *testing.T) {
 		{code: "site_offset", exit: 0, mutate: func(r *review.Review, _ *fixture.Set) { r.Edges[0].Ref.Line = 4 }},
 		{code: "unmentioned_hunk", exit: 0, mutate: func(r *review.Review, _ *fixture.Set) { r.Nodes = append(r.Nodes[:2], r.Nodes[3:]...) }},
 		{code: "unreferenced_test_hunk", exit: 0, mutate: func(r *review.Review, _ *fixture.Set) { r.Nodes[9].Kind = "code" }},
-		{code: "untested_change", exit: 0, mutate: func(r *review.Review, _ *fixture.Set) {}},
 		{code: "unlisted_repo", exit: 0, raw: func(s *fixture.Set) []byte { b, _ := json.Marshal(s.Review()); return b }},
 		{code: "uncommitted_changes", exit: 1, mutate: func(r *review.Review, s *fixture.Set) { r.Repos[0].Commits = []string{s.WebChange} }},
 		{code: "head_ahead", exit: 0, fresh: true, mutate: func(r *review.Review, s *fixture.Set) {
@@ -172,27 +171,6 @@ func TestSiblingsNotScannedByDefault(t *testing.T) {
 	res := validate(t, s, s.Review())
 	if n := codes(res.out.Warnings)["unlisted_repo"]; n != 0 {
 		t.Fatalf("unlisted_repo without --scan-siblings:\n%s", res.raw)
-	}
-}
-
-func TestUntestedSkipsNonSource(t *testing.T) {
-	s := fixture.Build(t)
-	r := s.Review()
-	r.Nodes[2].Ref.Language = "yaml" // const-c, otherwise untested
-	res := validate(t, s, r)
-	for _, f := range res.out.Warnings {
-		if f.Code != "untested_change" {
-			continue
-		}
-		if f.Path == "/nodes/2" || f.Path == "/nodes/6" { // yaml, binary image
-			t.Errorf("untested_change on non-source node %s", f.Path)
-		}
-		if f.Path == "/nodes/0" {
-			t.Errorf("fn-a has a tests edge but is reported untested")
-		}
-	}
-	if codes(res.out.Warnings)["untested_change"] == 0 {
-		t.Fatalf("source nodes should still be reported untested:\n%s", res.raw)
 	}
 }
 

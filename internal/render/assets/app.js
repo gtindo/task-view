@@ -374,10 +374,9 @@
     { id: "chain", label: "Other errors", level: "err", icon: "alert", match: (f) => f.level === "error" && !f.status },
     { id: "unmentioned_hunk", label: "Unmentioned changes", level: "warn", icon: "diff", match: (f) => f.code === "unmentioned_hunk" },
     { id: "unreferenced_test_hunk", label: "Unreferenced test code", level: "warn", icon: "test", match: (f) => f.code === "unreferenced_test_hunk" },
-    { id: "untested_change", label: "Untested changed nodes", level: "warn", icon: "target", match: (f) => f.code === "untested_change" },
     { id: "unlisted_repo", label: "Unlisted repos", level: "warn", icon: "repo", match: (f) => f.code === "unlisted_repo" },
     { id: "uncommitted", label: "Work outside the review", level: "warn", icon: "branch", match: (f) => f.code === "uncommitted_changes" || f.code === "head_ahead" },
-    { id: "other", label: "Other warnings", level: "warn", icon: "alert", match: (f) => f.level === "warning" && !["unmentioned_hunk", "unreferenced_test_hunk", "untested_change", "unlisted_repo", "uncommitted_changes", "head_ahead"].includes(f.code) },
+    { id: "other", label: "Other warnings", level: "warn", icon: "alert", match: (f) => f.level === "warning" && !["unmentioned_hunk", "unreferenced_test_hunk", "unlisted_repo", "uncommitted_changes", "head_ahead"].includes(f.code) },
   ];
 
   function changedTests() {
@@ -1273,8 +1272,7 @@
     }
 
     const finds = elementFindings(`/nodes/${n.index}`).filter((f) => !(f.status && f.path.endsWith("/ref") && n.result.codes && n.result.reason === f.message));
-    const extra = allFindings.filter((f) => f.code === "untested_change" && f.path === `/nodes/${n.index}`);
-    const nodeFinds = [...new Set(finds.concat(extra))].filter((f) => f.level === "warning" || !f.status);
+    const nodeFinds = finds.filter((f) => f.level === "warning" || !f.status);
     if (nodeFinds.length) body.appendChild(sec("Findings", "alert", h("div", { class: "flist" }, nodeFinds.map((f) => findingItem(f, false)))));
 
     if (n.kind !== "test") {
