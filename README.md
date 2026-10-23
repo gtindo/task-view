@@ -6,75 +6,121 @@ When a coding agent finishes a task on its own, you usually get a diff and a
 confident summary in chat. Checking that the summary is true means reading
 the whole diff yourself.
 
-`task-view` changes the handover. When the agent is done, it writes a
-structured account of the task: which functions, components and tests it
-touched, why, how they connect, and the claims a reviewer might doubt, each
-pointing at exact files, lines and commits. `task-view` checks every one of
-those references against Git and turns the account into one offline HTML page
-where each element is marked **verified**, **contradicted**, **unresolved** or
-**the agent's word**.
+With `task-view`, the agent hands over a structured account of the task
+instead, and you read it as one page: a graph of what changed, the flows it
+affects, a map of every changed line and the claims the agent makes. Every
+reference in it is checked against Git, so each element is marked
+**verified**, **contradicted**, **unresolved** or **the agent's word**.
 
 ![The graph view of a review: changed functions and components, grouped by repo, with the relations between them](docs/images/graph.png)
 
-## What it checks, and what it doesn't
+## What you get
 
-- It checks **the account, not the work.** It confirms that every reference
-  resolves, that each node really changed the way the agent says, and that
-  every changed line is described by some node. Whether the code is good
-  stays your call; the page makes that call faster.
-- It is **read-only.** It reads files and runs a short list of read-only Git
-  commands. It never runs your tests, builds, linters or any project tooling.
-  A test result on the page is always shown as the agent's word.
-- It writes **one file**: the HTML page, which works offline and can be kept
-  or shared.
+- **The change at a glance**, not a wall of diff: functions, components,
+  endpoints and tests as a graph, with the agent's reason for each change.
+- **Nothing hidden.** The diff map shows every changed line and flags any
+  that the agent didn't mention.
+- **Facts separated from the agent's word.** File, line and commit
+  references are checked; test results and explanations are labelled as
+  what the agent says.
+- **One offline HTML file per task** that you can keep or share.
+- **Safe to run anywhere.** It only reads files and runs read-only Git. It
+  never runs your tests, builds or other tooling.
+- **Works with any coding agent** that can follow written instructions:
+  Claude Code, Codex, and others.
 
-## How it works
+## Install
 
-```mermaid
-flowchart TD
-    subgraph agent["Coding agent"]
-        A1["Finishes the task"]
-        A2["Writes .review/change-#lt;task#gt;.json<br/>nodes, edges, flows, claims, notes"]
-        A3["Fixes the account<br/>using each finding's hint"]
-    end
+Download the binary for your machine from the
+[latest release](https://github.com/gtindo/task-view/releases/latest):
 
-    subgraph tool["task-view (read-only Git, no project tooling)"]
-        V["task-view validate<br/>schema · commits · references<br/>· diff coverage"]
-        O["task-view open<br/>same checks, then one<br/>offline HTML page"]
-    end
+| Platform | File |
+| --- | --- |
+| macOS, Apple silicon | `task-view-darwin-arm64` |
+| macOS, Intel | `task-view-darwin-amd64` |
+| Linux, x86-64 | `task-view-linux-amd64` |
+| Linux, ARM64 | `task-view-linux-arm64` |
+| Windows, x86-64 | `task-view-windows-amd64.exe` |
 
-    subgraph you["You"]
-        R["Review the page:<br/>graph, flows, diff map, claims"]
-        D{"Satisfied?"}
-        OK["Merge, commit<br/>or move on"]
-    end
+On macOS or Linux, one command does it (swap in your file name from the
+table):
 
-    A1 --> A2 --> V
-    V -- "errors or unmentioned changes" --> A3
-    A3 --> V
-    V -- "exit 0: hands over the open command" --> O
-    O --> R --> D
-    D -- yes --> OK
-    D -- "no: ask for a revision" --> A1
+```bash
+curl -fsSL https://github.com/gtindo/task-view/releases/latest/download/task-view-darwin-arm64 -o task-view && chmod +x task-view && sudo mv task-view /usr/local/bin/
 ```
 
-1. **The agent finishes the task** and writes `.review/change-<task>.json` in
-   the repo where the task started. The file lists the repos and commits it
-   covers, one node per meaningful piece of the change (a function, a
-   component, a config block, a test case), the edges between them, the
-   user-visible flows they form, and any claims, each with a reference to
-   exact lines or commits.
-2. **The agent validates its own account** with
-   `task-view validate .review/change-<task>.json --format json`. Every error
-   and warning carries a hint written for the agent to act on (a wrong line
-   range, a substring not on that line, changed lines no node describes). It
-   repeats until the file validates.
-3. **You open the review** with `task-view open .review/change-<task>.json`.
-   The tool runs the same checks, reads only the repos listed in the file, and
-   writes one self-contained page that opens in your browser.
-4. **You decide.** If something is off, ask the agent to fix the code or the
-   account; it rewrites the same file and `open` gives a fresh page. Each task
-   keeps its own file, so earlier reviews stay in `.review/`.
+Otherwise rename the file `task-view` (`task-view.exe` on Windows) and put it
+on your `PATH`; the [user guide](docs/USER_GUIDE.md#1-install) has the exact
+commands for each platform, Windows included. Or build it with Go:
+
+```bash
+go install github.com/gtindo/task-view/cmd/task-view@latest
+```
+
+From a checkout, `make install` puts `task-view` in `$(go env GOPATH)/bin`.
+The only runtime dependency is `git`.
+
+## Quick start
+
+1. **Install `task-view`** (above) and **teach your agent the format** once,
+   in one of the three ways below.
+2. **Give the agent a task.** When it is done, it writes
+   `.review/change-<task>.json` and checks it with `task-view validate` until
+   the account holds.
+3. **Open the review** with the command the agent gives you:
+
+   ```bash
+   task-view open .review/change-<task>.json
+   ```
+
+   If something looks wrong, ask the agent to revise the code or the account
+   and run `open` again.
+
+### Teach your agent: as a skill (recommended)
+
+[`skills/task-review/SKILL.md`](skills/task-review/SKILL.md) is a ready-made
+skill. It tells the agent to run `task-view instructions` when it finishes a
+task and follow what it prints, so the instructions always match the installed
+binary. For Claude Code, copy it into the repo, or into `~/.claude/skills/`
+for every repo:
+
+```bash
+mkdir -p .claude/skills/task-review
+curl -fsSL https://raw.githubusercontent.com/gtindo/task-view/main/skills/task-review/SKILL.md -o .claude/skills/task-review/SKILL.md
+```
+
+Any agent that reads skills (a `SKILL.md` with `name` and `description` front
+matter) takes the same file. It is also attached to every release.
+
+### Or: as a context file
+
+Write the instructions into the repo and point your agent's context file at
+them:
+
+```bash
+task-view instructions > TASK_REVIEW.md
+```
+
+Then add one line to that repo's `AGENTS.md` (Codex and most agents) or
+`CLAUDE.md` (Claude Code):
+
+```markdown
+When you finish a task, follow TASK_REVIEW.md.
+```
+
+Refresh the file after upgrading `task-view`.
+
+### Or: as a one-off prompt
+
+No setup at all: end your task prompt with
+
+> When you're done, run `task-view instructions` and write a review file for
+> this task.
+
+The same works for work that is already committed:
+
+> Run `task-view instructions` and write `.review/change-<name>.json` for
+> commit `<sha>`. Don't change any code.
 
 ## The page
 
@@ -145,81 +191,6 @@ mentions.
 
 ![A review with one contradicted edge and one unmentioned change, under a red error banner](docs/images/findings.png)
 
-## Install
-
-Download the binary for your machine from the
-[latest release](https://github.com/gtindo/task-view/releases/latest):
-
-| Platform | File |
-| --- | --- |
-| macOS, Apple silicon | `task-view-darwin-arm64` |
-| macOS, Intel | `task-view-darwin-amd64` |
-| Linux, x86-64 | `task-view-linux-amd64` |
-| Linux, ARM64 | `task-view-linux-arm64` |
-| Windows, x86-64 | `task-view-windows-amd64.exe` |
-
-Rename it `task-view` (`task-view.exe` on Windows) and put it on your `PATH`;
-the [user guide](docs/USER_GUIDE.md#1-install) has the exact commands for each
-platform. Or build it with Go:
-
-```bash
-go install github.com/gtindo/task-view/cmd/task-view@latest
-```
-
-From a checkout, `make install` puts `task-view` in `$(go env GOPATH)/bin`.
-The only runtime dependency is `git`.
-
-## Use it with your coding agent
-
-The agent needs to know the review file format and the procedure. Pick one
-way to give it that.
-
-### As a skill (recommended)
-
-[`skills/task-review/SKILL.md`](skills/task-review/SKILL.md) is a ready-made
-skill. It tells the agent to run `task-view instructions` when it finishes a
-task and follow what it prints, so the instructions always match the installed
-binary. For Claude Code, copy it into the repo, or into `~/.claude/skills/`
-for every repo:
-
-```bash
-mkdir -p .claude/skills/task-review
-curl -fsSL https://raw.githubusercontent.com/gtindo/task-view/main/skills/task-review/SKILL.md -o .claude/skills/task-review/SKILL.md
-```
-
-Any agent that reads skills (a `SKILL.md` with `name` and `description` front
-matter) takes the same file. It is also attached to every release.
-
-### As a context file
-
-Write the instructions into the repo and point your agent's context file at
-them:
-
-```bash
-task-view instructions > TASK_REVIEW.md
-```
-
-Then add one line to that repo's `AGENTS.md` (Codex and most agents) or
-`CLAUDE.md` (Claude Code):
-
-```markdown
-When you finish a task, follow TASK_REVIEW.md.
-```
-
-Refresh the file after upgrading `task-view`.
-
-### As a one-off prompt
-
-No setup at all: end your task prompt with
-
-> When you're done, run `task-view instructions` and write a review file for
-> this task.
-
-The same works for work that is already committed:
-
-> Run `task-view instructions` and write `.review/change-<name>.json` for
-> commit `<sha>`. Don't change any code.
-
 ## Guides
 
 | Guide | For | What it covers |
@@ -243,6 +214,38 @@ The same works for work that is already committed:
 Only the repos listed in the review file are read. `--scan-siblings` also
 looks at the folders next to them and warns (`unlisted_repo`) about Git repos
 with uncommitted changes that the review doesn't list.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Agent finishes<br/>the task"] --> W["Writes<br/>.review/change-#lt;task#gt;.json"]
+    W --> V{"task-view<br/>validate"}
+    V -- "findings with hints" --> F["Agent fixes<br/>the account"]
+    F --> V
+    V -- "exit 0" --> O["task-view open"]
+    O --> R["You review<br/>the page"]
+    R -. "ask for a revision" .-> A
+```
+
+1. **The agent writes an account.** `.review/change-<task>.json` lists the
+   repos and commits it covers, one node per meaningful piece of the change
+   (a function, a component, a config block, a test case), the edges between
+   them, the flows they form, and claims, each pointing at exact lines or
+   commits.
+2. **The agent validates it.** `task-view validate --format json` checks the
+   schema, the commit chain, every reference and the diff coverage. Each
+   error or warning carries a hint written for the agent to act on (a wrong
+   line range, text not on that line, changed lines no node describes), and
+   the agent repeats until the file validates.
+3. **You open it.** `task-view open` runs the same checks, reads only the
+   repos listed in the file, and writes the page to
+   `.review/generated/change-<task>.html`. Each task keeps its own file, so
+   earlier reviews stay in `.review/`.
+
+The checks confirm that **the account matches the diff, never that the work
+is good**: that stays your call. The tool reads files and runs a short list of
+read-only Git commands; a test result on the page is always the agent's word.
 
 ## Development
 
