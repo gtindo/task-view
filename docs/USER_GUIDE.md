@@ -24,25 +24,6 @@ there to make it easier. The tool reads files and runs read-only Git
 commands. It never runs your tests, builds or linters. The only file it
 writes is the page, in `.review/generated/` unless you choose another path.
 
-## Contents of this folder
-
-These files are attached to every release on the
-[GitHub Releases page](https://github.com/gtindo/task-view/releases).
-
-| File | What it is |
-| --- | --- |
-| `task-view-darwin-arm64` | macOS on Apple silicon (M1 and later) |
-| `task-view-darwin-amd64` | macOS on Intel |
-| `task-view-linux-amd64` | Linux x86-64 (static, no dependencies) |
-| `task-view-linux-arm64` | Linux ARM64, e.g. Raspberry Pi 4/5, Graviton (static) |
-| `task-view-windows-amd64.exe` | Windows x86-64 |
-| `SHA256SUMS` | Checksums of the five binaries |
-| `TASK_REVIEW.md` | The instructions your agent follows to write the review file |
-| `SKILL.md` | The same workflow packaged as an agent skill |
-| `USER_GUIDE.md` | This guide |
-
-The only thing `task-view` needs at run time is `git` on your `PATH`.
-
 ## 1. Install
 
 `task-view` installs for your user only: no `sudo`, no administrator rights.
@@ -51,7 +32,9 @@ release, check it against `SHA256SUMS`, put it in a folder in your home
 directory and add that folder to your `PATH`. Run the same script again to
 update.
 
-### macOS and Linux
+The only thing `task-view` needs at run time is `git` on your `PATH`.
+
+### Install script: macOS and Linux
 
 Paste this into a terminal. It works in zsh and bash, picks the right binary
 for your system and CPU, installs it as `~/.local/bin/task-view`, and on
@@ -129,7 +112,7 @@ file (`~/.zshrc`, `~/.bash_profile` on macOS or `~/.bashrc` on Linux).
 Open a new terminal afterwards so the `PATH` change applies. To pin a
 version, change `version=latest` to a tag such as `version=v1.0.0`.
 
-### Windows
+### Install script: Windows
 
 Paste this into PowerShell. It installs `task-view.exe` in
 `%LOCALAPPDATA%\Programs\task-view`, removes the "downloaded from the
@@ -178,11 +161,27 @@ internet" mark so Windows doesn't block it, and adds the folder to your user
 
 Open a new terminal afterwards so the `PATH` change applies.
 
-### Manual install
+### Other ways to install
+
+#### Manual download
 
 If you'd rather not run a script, download the file for your machine from the
 [releases page](https://github.com/gtindo/task-view/releases) and install it
-yourself. macOS (Apple silicon shown; use `darwin-amd64` on Intel):
+yourself. Every release has these files:
+
+| File | What it is |
+| --- | --- |
+| `task-view-darwin-arm64` | macOS on Apple silicon (M1 and later) |
+| `task-view-darwin-amd64` | macOS on Intel |
+| `task-view-linux-amd64` | Linux x86-64 (static, no dependencies) |
+| `task-view-linux-arm64` | Linux ARM64, e.g. Raspberry Pi 4/5, Graviton (static) |
+| `task-view-windows-amd64.exe` | Windows x86-64 |
+| `SHA256SUMS` | Checksums of the five binaries |
+| `TASK_REVIEW.md` | The instructions your agent follows to write the review file |
+| `SKILL.md` | The same workflow packaged as an agent skill |
+| `USER_GUIDE.md` | This guide |
+
+macOS (Apple silicon shown; use `darwin-amd64` on Intel):
 
 ```bash
 mkdir -p ~/.local/bin
@@ -217,6 +216,17 @@ shasum -a 256 -c SHA256SUMS --ignore-missing   # or sha256sum on Linux
 
 On Windows, compare `certutil -hashfile task-view.exe SHA256` with the
 `task-view-windows-amd64.exe` line of `SHA256SUMS`.
+
+#### With Go
+
+If you have Go installed, build and install the latest version into
+`$(go env GOPATH)/bin`:
+
+```bash
+go install github.com/gtindo/task-view/cmd/task-view@latest
+```
+
+From a checkout of the repository, `make install` does the same.
 
 ## 2. Teach your agent the format
 
@@ -254,7 +264,7 @@ front matter) take the same file in their own skills folder.
 
 You don't strictly need the file: the binary prints the same text, so you can
 just ask "run `task-view instructions` and write a review file for this
-task". The copy in this folder always matches this binary. After you update
+task". The copy attached to each release matches that release. After you update
 `task-view`, refresh it with `task-view instructions > TASK_REVIEW.md`.
 
 ## 3. Daily workflow

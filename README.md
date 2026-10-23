@@ -48,33 +48,137 @@ it.
 
 ## Install
 
-No `sudo` or administrator rights needed: `task-view` installs for your user
-only. The [user guide](docs/USER_GUIDE.md#1-install) has copy-paste install
-scripts for macOS, Linux and Windows. They pick the right binary, check its
-checksum, put it in `~/.local/bin` (or `%LOCALAPPDATA%\Programs\task-view`),
-add that folder to your `PATH`, and on macOS clear the quarantine flag.
+`task-view` installs for your user only: no `sudo` or administrator rights.
+The only runtime dependency is `git`.
 
-Or download the binary for your machine from the
-[latest release](https://github.com/gtindo/task-view/releases/latest)
-yourself:
-
-| Platform | File |
-| --- | --- |
-| macOS, Apple silicon | `task-view-darwin-arm64` |
-| macOS, Intel | `task-view-darwin-amd64` |
-| Linux, x86-64 | `task-view-linux-amd64` |
-| Linux, ARM64 | `task-view-linux-arm64` |
-| Windows, x86-64 | `task-view-windows-amd64.exe` |
-
-and rename it `task-view` (`task-view.exe` on Windows) in a folder on your
-`PATH`. Or build it with Go:
+**macOS and Linux.** Paste this into a terminal (zsh or bash). It picks the
+binary for your system and CPU, checks it against the release checksums,
+installs it as `~/.local/bin/task-view`, clears the macOS quarantine flag and
+adds `~/.local/bin` to your `PATH` if needed. Run it again to update.
 
 ```bash
-go install github.com/gtindo/task-view/cmd/task-view@latest
+(
+  set -eu
+
+  version=latest        # or a tag such as v1.0.0
+  dir="$HOME/.local/bin"
+
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) echo "Unsupported system: $(uname -s)" >&2; exit 1 ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) echo "Unsupported CPU: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  file="task-view-$os-$arch"
+  base="https://github.com/gtindo/task-view/releases/latest/download"
+  [ "$version" = latest ] || base="https://github.com/gtindo/task-view/releases/download/$version"
+
+  tmp="$(mktemp -d)"
+  echo "Downloading $file ($version)..."
+  curl -fsSL "$base/$file" -o "$tmp/$file"
+  curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"
+
+  cd "$tmp"
+  if command -v sha256sum >/dev/null 2>&1; then
+    grep " $file\$" SHA256SUMS | sha256sum -c -
+  else
+    grep " $file\$" SHA256SUMS | shasum -a 256 -c -
+  fi
+  cd - >/dev/null
+
+  mkdir -p "$dir"
+  mv "$tmp/$file" "$dir/task-view"
+  chmod 755 "$dir/task-view"
+  rm -f "$tmp/SHA256SUMS"
+  rmdir "$tmp"
+
+  # A binary downloaded by a browser is quarantined by macOS Gatekeeper and
+  # refuses to start; clearing the flag is harmless when it is not set.
+  if [ "$os" = darwin ]; then
+    xattr -d com.apple.quarantine "$dir/task-view" 2>/dev/null || true
+  fi
+
+  "$dir/task-view" version
+
+  case ":$PATH:" in
+    *":$dir:"*) echo "Installed $dir/task-view" ;;
+    *)
+      case "${SHELL##*/}" in
+        zsh) rc="$HOME/.zshrc" ;;
+        bash) [ "$os" = darwin ] && rc="$HOME/.bash_profile" || rc="$HOME/.bashrc" ;;
+        *) rc="$HOME/.profile" ;;
+      esac
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+      echo "Installed $dir/task-view and added $dir to PATH in $rc."
+      echo "Open a new terminal, or run: export PATH=\"$dir:\$PATH\""
+      ;;
+  esac
+)
 ```
 
-From a checkout, `make install` puts `task-view` in `$(go env GOPATH)/bin`.
-The only runtime dependency is `git`.
+**Windows.** Paste this into PowerShell. It does the same, installing
+`task-view.exe` in `%LOCALAPPDATA%\Programs\task-view` and adding that folder
+to your user `PATH`.
+
+```powershell
+& {
+  $ErrorActionPreference = "Stop"
+  $ProgressPreference = "SilentlyContinue"
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+  $version = "latest"   # or a tag such as v1.0.0
+  $dir = Join-Path $env:LOCALAPPDATA "Programs\task-view"
+  $file = "task-view-windows-amd64.exe"
+  $base = "https://github.com/gtindo/task-view/releases/latest/download"
+  if ($version -ne "latest") { $base = "https://github.com/gtindo/task-view/releases/download/$version" }
+
+  $tmp = Join-Path $env:TEMP $file
+  $sums = Join-Path $env:TEMP "task-view-SHA256SUMS"
+  Write-Host "Downloading $file ($version)..."
+  Invoke-WebRequest "$base/$file" -OutFile $tmp -UseBasicParsing
+  Invoke-WebRequest "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing
+
+  $expected = (Select-String -Path $sums -Pattern " $file$").Line.Split(" ")[0]
+  $actual = (Get-FileHash $tmp -Algorithm SHA256).Hash
+  Remove-Item $sums
+  if ($actual -ne $expected) { Remove-Item $tmp; throw "Checksum mismatch for $file" }
+
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $exe = Join-Path $dir "task-view.exe"
+  Move-Item -Force $tmp $exe
+  Unblock-File $exe
+  & $exe version
+
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (($userPath -split ";") -notcontains $dir) {
+    $newPath = if ($userPath) { "$userPath;$dir" } else { $dir }
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    Write-Host "Installed $exe and added $dir to your PATH. Open a new terminal."
+  } else {
+    Write-Host "Installed $exe"
+  }
+}
+```
+
+Open a new terminal afterwards so the `PATH` change applies.
+
+### Other ways to install
+
+- **Manual download.** Get the file for your machine from the
+  [latest release](https://github.com/gtindo/task-view/releases/latest)
+  (`task-view-darwin-arm64`, `task-view-darwin-amd64`,
+  `task-view-linux-amd64`, `task-view-linux-arm64` or
+  `task-view-windows-amd64.exe`), rename it `task-view` (`task-view.exe` on
+  Windows) and put it in a folder on your `PATH`. The
+  [user guide](docs/USER_GUIDE.md#manual-download) has the exact commands.
+- **With Go:** `go install github.com/gtindo/task-view/cmd/task-view@latest`,
+  or `make install` from a checkout.
 
 ## Quick start
 
