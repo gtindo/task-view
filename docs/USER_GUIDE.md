@@ -11,6 +11,12 @@ that into one HTML page you read in the browser: a graph of the change, its
 flows step by step, a map of every changed line, and each piece's code next
 to the agent's reason for it.
 
+It works with any programming language, and with changes that mix several
+languages across repos. `task-view` never parses code: everything is built
+from files, line ranges and diffs. The language names in the review file
+only choose the syntax colouring (about 300 languages, listed by
+`task-view languages`); a file in any other language shows as plain text.
+
 Before building the page, `task-view` checks every file, line and commit the
 agent points at against your repos, so the map matches the real diff. Those
 checks never say whether the code is good: that is your job, and the page is

@@ -37,6 +37,12 @@ it.
 - **One offline HTML file per task** that you can keep or share. Building it
   only reads files and runs read-only Git; it never runs your tests, builds
   or other tooling.
+- **Works with any programming language.** Nothing is parsed: the map is
+  built from files, line ranges and diffs, so it fits Go, TypeScript,
+  Python, Rust, SQL, config or infrastructure code alike, and changes that
+  span several languages and repos (a web client and its API, say).
+  Syntax highlighting covers about 300 languages; anything else shows as
+  plain text.
 - **Works with any coding agent** that can follow written instructions:
   Claude Code, Codex, and others.
 
