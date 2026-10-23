@@ -111,25 +111,30 @@ type Ref struct {
 	Language string `json:"language,omitempty"`
 }
 
+// hasLineSpan reports whether the ref gives its lines as a [start, end] pair.
+func (r *Ref) hasLineSpan() bool { return len(r.Lines) == 2 }
+
 // Start returns the first line the ref covers, or 0.
 func (r *Ref) Start() int {
 	switch {
-	case len(r.Lines) == 2:
+	case r.hasLineSpan():
 		return r.Lines[0]
 	case r.Line > 0:
 		return r.Line
 	}
+
 	return 0
 }
 
 // End returns the last line the ref covers, or 0.
 func (r *Ref) End() int {
 	switch {
-	case len(r.Lines) == 2:
+	case r.hasLineSpan():
 		return r.Lines[1]
 	case r.Line > 0:
 		return r.Line
 	}
+
 	return 0
 }
 

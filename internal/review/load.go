@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -19,32 +19,52 @@ import (
 	"github.com/gtindo/changes-view/internal/langs"
 )
 
+// SchemaJSON is the JSON Schema of the review file. Parse validates against
+// it and `change-view schema` prints it so agents can check their output.
+//
 //go:embed schema.json
 var SchemaJSON []byte
 
 const schemaURL = "https://github.com/gtindo/changes-view/schema/v1/change.json"
 
+// schemaHint points an agent at the full schema when a finding cannot name
+// the exact rule it broke.
+const schemaHint = "run `change-view schema` for the exact JSON Schema"
+
+// languageSuggestions is how many close names an unknown language finding
+// suggests.
+const languageSuggestions = 3
+
+// parentDirSegment matches a `..` path segment, which would leave the repo.
+var parentDirSegment = regexp.MustCompile(`(^|/)\.\.(/|$)`)
+
 var (
-	schemaOnce sync.Once
-	schema     *jsonschema.Schema
-	schemaErr  error
+	schemaOnce        sync.Once
+	compiledSchema    *jsonschema.Schema
+	compiledSchemaErr error
 )
 
+// compiled returns the embedded schema, compiled once on first use.
 func compiled() (*jsonschema.Schema, error) {
 	schemaOnce.Do(func() {
 		doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(SchemaJSON))
 		if err != nil {
-			schemaErr = err
+			compiledSchemaErr = err
+
 			return
 		}
-		c := jsonschema.NewCompiler()
-		if err := c.AddResource(schemaURL, doc); err != nil {
-			schemaErr = err
+
+		compiler := jsonschema.NewCompiler()
+		if err := compiler.AddResource(schemaURL, doc); err != nil {
+			compiledSchemaErr = err
+
 			return
 		}
-		schema, schemaErr = c.Compile(schemaURL)
+
+		compiledSchema, compiledSchemaErr = compiler.Compile(schemaURL)
 	})
-	return schema, schemaErr
+
+	return compiledSchema, compiledSchemaErr
 }
 
 // Load reads and checks a review file without touching Git. When the
@@ -55,116 +75,152 @@ func Load(path string) (*Review, []Finding) {
 		return nil, []Finding{NewFinding("file_unreadable", "", fmt.Sprintf("cannot read review file: %v", err),
 			"check the path; it may be absolute or relative to the current directory")}
 	}
+
 	return Parse(data)
 }
 
 // Parse checks review file bytes: JSON, version, schema, cross-references.
 func Parse(data []byte) (*Review, []Finding) {
-	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 	if err != nil {
 		return nil, []Finding{NewFinding("file_unreadable", "", fmt.Sprintf("review file is not valid JSON: %v", err),
 			"write the file as a single JSON object")}
 	}
 
-	if f, ok := checkVersion(inst); !ok {
-		return nil, []Finding{f}
+	if finding, ok := checkVersion(instance); !ok {
+		return nil, []Finding{finding}
 	}
 
-	sch, err := compiled()
+	schema, err := compiled()
 	if err != nil {
 		panic("embedded schema does not compile: " + err.Error())
 	}
-	if err := sch.Validate(inst); err != nil {
-		var verr *jsonschema.ValidationError
-		if errors.As(err, &verr) {
-			return nil, schemaFindings(verr)
+
+	if err := schema.Validate(instance); err != nil {
+		var validationErr *jsonschema.ValidationError
+		if errors.As(err, &validationErr) {
+			return nil, schemaFindings(validationErr)
 		}
-		return nil, []Finding{NewFinding("schema_invalid", "", err.Error(), "run `change-view schema` for the exact JSON Schema")}
+
+		return nil, []Finding{NewFinding("schema_invalid", "", err.Error(), schemaHint)}
 	}
 
-	var r Review
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&r); err != nil {
-		return nil, []Finding{NewFinding("schema_invalid", "", err.Error(), "run `change-view schema` for the exact JSON Schema")}
+	var parsed Review
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&parsed); err != nil {
+		return nil, []Finding{NewFinding("schema_invalid", "", err.Error(), schemaHint)}
 	}
-	for _, repo := range r.Repos {
+
+	// The role is optional in the file: a repo the agent did not mark as
+	// context is one it changed.
+	for _, repo := range parsed.Repos {
 		if repo.Role == "" {
 			repo.Role = RoleChanged
 		}
 	}
 
-	findings := crossCheck(&r)
+	findings := parsed.crossCheck()
 	if ExitCode(findings) == ExitSchema {
 		return nil, findings
 	}
-	return &r, findings
+
+	return &parsed, findings
 }
 
-func checkVersion(inst any) (Finding, bool) {
-	obj, ok := inst.(map[string]any)
+// checkVersion runs before schema validation so an unsupported version gets
+// one clear finding instead of a list of schema violations. It returns
+// ok=false with that finding; anything that is not a numeric version is left
+// to the schema.
+func checkVersion(instance any) (Finding, bool) {
+	object, ok := instance.(map[string]any)
 	if !ok {
 		return Finding{}, true
 	}
-	raw, present := obj["version"]
+
+	raw, present := object["version"]
 	if !present {
 		return Finding{}, true
 	}
-	num, isNum := raw.(json.Number)
-	if !isNum {
+
+	version, isNumber := raw.(json.Number)
+	if !isNumber {
 		return Finding{}, true
 	}
-	for _, v := range SupportedVersions {
-		if num.String() == fmt.Sprint(v) {
-			return Finding{}, true
-		}
+
+	isSupported := slices.ContainsFunc(SupportedVersions, func(supported int) bool {
+		return version.String() == fmt.Sprint(supported)
+	})
+	if isSupported {
+		return Finding{}, true
 	}
+
 	return NewFinding("unsupported_version", "/version",
-		fmt.Sprintf("version %s is not supported by this binary", num),
+		fmt.Sprintf("version %s is not supported by this binary", version),
 		fmt.Sprintf("use \"version\": %d; run `change-view version` for supported versions", SchemaVersion)), false
 }
 
 // schemaFindings flattens a validation error into one finding per leaf
 // failure, each with the JSON Pointer of the failing value.
-func schemaFindings(verr *jsonschema.ValidationError) []Finding {
-	p := message.NewPrinter(language.English)
+func schemaFindings(validationErr *jsonschema.ValidationError) []Finding {
+	printer := message.NewPrinter(language.English)
 	seen := map[string]bool{}
+
 	var findings []Finding
-	var walk func(e *jsonschema.ValidationError)
-	walk = func(e *jsonschema.ValidationError) {
-		if len(e.Causes) > 0 {
-			for _, c := range e.Causes {
-				walk(c)
+
+	var collectLeaves func(failure *jsonschema.ValidationError)
+	collectLeaves = func(failure *jsonschema.ValidationError) {
+		if len(failure.Causes) > 0 {
+			for _, cause := range failure.Causes {
+				collectLeaves(cause)
 			}
+
 			return
 		}
-		ptr := ""
-		for _, tok := range e.InstanceLocation {
-			ptr += "/" + escapePointer(tok)
+
+		pointer := ""
+		for _, token := range failure.InstanceLocation {
+			pointer += "/" + escapePointer(token)
 		}
-		msg := e.ErrorKind.LocalizedString(p)
-		hint := "fix the value at this path; run `change-view schema` for the exact JSON Schema"
-		kw := strings.Join(e.ErrorKind.KeywordPath(), "/")
-		if strings.Contains(e.SchemaURL, "/not") || kw == "not" {
-			msg = "field not allowed for this ref type"
+
+		description := failure.ErrorKind.LocalizedString(printer)
+		hint := "fix the value at this path; " + schemaHint
+
+		// The schema forbids the fields of other ref types with `not`, whose
+		// generic message does not tell an agent which fields belong where.
+		keywordPath := strings.Join(failure.ErrorKind.KeywordPath(), "/")
+
+		isForbiddenField := strings.Contains(failure.SchemaURL, "/not") || keywordPath == "not"
+		if isForbiddenField {
+			description = "field not allowed for this ref type"
 			hint = "file: repo+file; range/hunk: repo+file+lines; site: repo+file+line+contains; commit: repo+sha"
 		}
-		key := ptr + "|" + msg
+
+		// Alternative branches of the schema can report the same failure.
+		key := pointer + "|" + description
 		if seen[key] {
 			return
 		}
+
 		seen[key] = true
-		findings = append(findings, NewFinding("schema_invalid", ptr, msg, hint))
+		findings = append(findings, NewFinding("schema_invalid", pointer, description, hint))
 	}
-	walk(verr)
+
+	collectLeaves(validationErr)
+
 	if len(findings) == 0 {
-		findings = append(findings, NewFinding("schema_invalid", "", verr.Error(), "run `change-view schema` for the exact JSON Schema"))
+		findings = append(findings, NewFinding("schema_invalid", "", validationErr.Error(), schemaHint))
 	}
-	sort.SliceStable(findings, func(i, j int) bool { return findings[i].Path < findings[j].Path })
+
+	// Stable, so failures at one path keep the validator's order.
+	slices.SortStableFunc(findings, func(left, right Finding) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+
 	return findings
 }
-
-var badPathRe = regexp.MustCompile(`(^|/)\.\.(/|$)`)
 
 // RefLoc is a ref together with its JSON Pointer in the review file.
 type RefLoc struct {
@@ -174,137 +230,247 @@ type RefLoc struct {
 
 // AllRefs lists every ref in the file with its JSON Pointer.
 func (r *Review) AllRefs() []RefLoc {
-	var out []RefLoc
-	for i, n := range r.Nodes {
-		if n.Ref != nil {
-			out = append(out, RefLoc{n.Ref, fmt.Sprintf("/nodes/%d/ref", i)})
+	var refs []RefLoc
+
+	for i, node := range r.Nodes {
+		if node.Ref != nil {
+			refs = append(refs, RefLoc{Ref: node.Ref, Path: fmt.Sprintf("/nodes/%d/ref", i)})
 		}
 	}
-	for i, e := range r.Edges {
-		if e.Ref != nil {
-			out = append(out, RefLoc{e.Ref, fmt.Sprintf("/edges/%d/ref", i)})
+
+	for i, edge := range r.Edges {
+		if edge.Ref != nil {
+			refs = append(refs, RefLoc{Ref: edge.Ref, Path: fmt.Sprintf("/edges/%d/ref", i)})
 		}
 	}
-	for i, c := range r.Claims {
-		for j, ev := range c.Evidence {
-			out = append(out, RefLoc{ev, fmt.Sprintf("/claims/%d/evidence/%d", i, j)})
+
+	for i, claim := range r.Claims {
+		for j, evidence := range claim.Evidence {
+			refs = append(refs, RefLoc{Ref: evidence, Path: fmt.Sprintf("/claims/%d/evidence/%d", i, j)})
 		}
 	}
-	return out
+
+	return refs
 }
 
-func crossCheck(r *Review) []Finding {
-	var fs []Finding
+// crossCheck applies the rules the JSON Schema cannot express: unique ids,
+// links between elements, clean paths and known languages. Findings come in
+// the order the checks run.
+func (r *Review) crossCheck() []Finding {
+	repoIDs, findings := checkRepos(r.Repos)
+	nodesByID, nodeFindings := checkNodes(r.Nodes)
 
-	repos := map[string]*Repo{}
-	for i, repo := range r.Repos {
-		if _, dup := repos[repo.ID]; dup {
-			fs = append(fs, NewFinding("duplicate_id", fmt.Sprintf("/repos/%d/id", i),
-				fmt.Sprintf("repo id %q is used more than once", repo.ID), "give every repo a unique id"))
+	findings = append(findings, nodeFindings...)
+	findings = append(findings, checkFlowIDs(r.Flows)...)
+	findings = append(findings, checkEdgeNodes(r.Edges, nodesByID)...)
+	findings = append(findings, checkFlowNodes(r.Flows, nodesByID)...)
+	findings = append(findings, checkClaimNodes(r.Claims, nodesByID)...)
+	findings = append(findings, checkRefs(r.AllRefs(), repoIDs)...)
+
+	return findings
+}
+
+// checkRepos reports duplicate repo ids and unknown language names, and
+// returns the repo ids refs may use.
+func checkRepos(repos []*Repo) (map[string]bool, []Finding) {
+	repoIDs := map[string]bool{}
+
+	var findings []Finding
+
+	for i, repo := range repos {
+		if repoIDs[repo.ID] {
+			findings = append(findings, duplicateID(fmt.Sprintf("/repos/%d/id", i), "repo", repo.ID))
 		}
-		repos[repo.ID] = repo
-		for _, kv := range repo.Languages {
-			name := kv.String()
+
+		repoIDs[repo.ID] = true
+
+		for _, mapping := range repo.Languages {
+			name := mapping.String()
 			if !langs.Known(name) {
-				fs = append(fs, unknownLanguage(fmt.Sprintf("/repos/%d/languages/%s", i, escapePointer(kv.Key)), name))
+				path := fmt.Sprintf("/repos/%d/languages/%s", i, escapePointer(mapping.Key))
+				findings = append(findings, unknownLanguage(path, name))
 			}
 		}
 	}
 
-	nodes := map[string]*Node{}
-	for i, n := range r.Nodes {
-		if _, dup := nodes[n.ID]; dup {
-			fs = append(fs, NewFinding("duplicate_id", fmt.Sprintf("/nodes/%d/id", i),
-				fmt.Sprintf("node id %q is used more than once", n.ID), "give every node a unique id"))
+	return repoIDs, findings
+}
+
+// checkNodes reports duplicate node ids and changed nodes without a why, and
+// returns the nodes by id. With duplicates, the last node wins.
+func checkNodes(nodes []*Node) (map[string]*Node, []Finding) {
+	nodesByID := map[string]*Node{}
+
+	var findings []Finding
+
+	for i, node := range nodes {
+		if _, duplicate := nodesByID[node.ID]; duplicate {
+			findings = append(findings, duplicateID(fmt.Sprintf("/nodes/%d/id", i), "node", node.ID))
 		}
-		nodes[n.ID] = n
-		if n.IsChanged() && strings.TrimSpace(n.Why) == "" {
-			fs = append(fs, NewFinding("missing_why", fmt.Sprintf("/nodes/%d", i),
-				fmt.Sprintf("node %q is %s but has no why", n.ID, n.Change),
+
+		nodesByID[node.ID] = node
+
+		isUnexplainedChange := node.IsChanged() && strings.TrimSpace(node.Why) == ""
+		if isUnexplainedChange {
+			findings = append(findings, NewFinding("missing_why", fmt.Sprintf("/nodes/%d", i),
+				fmt.Sprintf("node %q is %s but has no why", node.ID, node.Change),
 				"add a one-sentence `why` giving the reason for the change"))
 		}
 	}
 
-	flows := map[string]bool{}
-	for i, f := range r.Flows {
-		if flows[f.ID] {
-			fs = append(fs, NewFinding("duplicate_id", fmt.Sprintf("/flows/%d/id", i),
-				fmt.Sprintf("flow id %q is used more than once", f.ID), "give every flow a unique id"))
+	return nodesByID, findings
+}
+
+// checkFlowIDs reports duplicate flow ids.
+func checkFlowIDs(flows []*Flow) []Finding {
+	flowIDs := map[string]bool{}
+
+	var findings []Finding
+
+	for i, flow := range flows {
+		if flowIDs[flow.ID] {
+			findings = append(findings, duplicateID(fmt.Sprintf("/flows/%d/id", i), "flow", flow.ID))
 		}
-		flows[f.ID] = true
+
+		flowIDs[flow.ID] = true
 	}
 
-	missingNode := func(path, id string) {
-		fs = append(fs, NewFinding("unknown_node", path, fmt.Sprintf("no node with id %q", id),
-			"use an id from `nodes`, or add the missing node"))
-	}
-	for i, e := range r.Edges {
-		if nodes[e.From] == nil {
-			missingNode(fmt.Sprintf("/edges/%d/from", i), e.From)
+	return findings
+}
+
+// checkEdgeNodes reports edge ends that name no node.
+func checkEdgeNodes(edges []*Edge, nodesByID map[string]*Node) []Finding {
+	var findings []Finding
+
+	for i, edge := range edges {
+		if nodesByID[edge.From] == nil {
+			findings = append(findings, unknownNode(fmt.Sprintf("/edges/%d/from", i), edge.From))
 		}
-		if nodes[e.To] == nil {
-			missingNode(fmt.Sprintf("/edges/%d/to", i), e.To)
+
+		if nodesByID[edge.To] == nil {
+			findings = append(findings, unknownNode(fmt.Sprintf("/edges/%d/to", i), edge.To))
 		}
 	}
-	for i, f := range r.Flows {
-		for j, id := range f.Path {
-			if nodes[id] == nil {
-				missingNode(fmt.Sprintf("/flows/%d/path/%d", i, j), id)
+
+	return findings
+}
+
+// checkFlowNodes reports flow steps and tests that name no node, and flow
+// tests that are not test nodes.
+func checkFlowNodes(flows []*Flow, nodesByID map[string]*Node) []Finding {
+	var findings []Finding
+
+	for i, flow := range flows {
+		for j, id := range flow.Path {
+			if nodesByID[id] == nil {
+				findings = append(findings, unknownNode(fmt.Sprintf("/flows/%d/path/%d", i, j), id))
 			}
 		}
-		for j, id := range f.Tests {
-			n := nodes[id]
-			if n == nil {
-				missingNode(fmt.Sprintf("/flows/%d/tests/%d", i, j), id)
-			} else if !n.IsTest() {
-				fs = append(fs, NewFinding("not_a_test", fmt.Sprintf("/flows/%d/tests/%d", i, j),
-					fmt.Sprintf("node %q has kind %q, not test", id, n.Kind),
+
+		for j, id := range flow.Tests {
+			path := fmt.Sprintf("/flows/%d/tests/%d", i, j)
+
+			node := nodesByID[id]
+			if node == nil {
+				findings = append(findings, unknownNode(path, id))
+
+				continue
+			}
+
+			if !node.IsTest() {
+				findings = append(findings, NewFinding("not_a_test", path,
+					fmt.Sprintf("node %q has kind %q, not test", id, node.Kind),
 					"list only nodes of kind `test` in flow tests; put other nodes in `path`"))
 			}
 		}
 	}
-	for i, c := range r.Claims {
-		for j, id := range c.About {
-			if nodes[id] == nil {
-				missingNode(fmt.Sprintf("/claims/%d/about/%d", i, j), id)
+
+	return findings
+}
+
+// checkClaimNodes reports nodes a claim is about that do not exist.
+func checkClaimNodes(claims []*Claim, nodesByID map[string]*Node) []Finding {
+	var findings []Finding
+
+	for i, claim := range claims {
+		for j, id := range claim.About {
+			if nodesByID[id] == nil {
+				findings = append(findings, unknownNode(fmt.Sprintf("/claims/%d/about/%d", i, j), id))
 			}
 		}
 	}
 
-	for _, site := range r.AllRefs() {
-		ref := site.Ref
-		if repos[ref.Repo] == nil {
-			fs = append(fs, NewFinding("unknown_repo", site.Path+"/repo",
+	return findings
+}
+
+// checkRefs reports refs to unlisted repos, unclean paths, reversed line
+// ranges and unknown languages.
+func checkRefs(refs []RefLoc, repoIDs map[string]bool) []Finding {
+	var findings []Finding
+
+	for _, location := range refs {
+		ref := location.Ref
+
+		if !repoIDs[ref.Repo] {
+			findings = append(findings, NewFinding("unknown_repo", location.Path+"/repo",
 				fmt.Sprintf("no repo with id %q", ref.Repo), "use an id from `repos`, or list the repo"))
 		}
-		if ref.File != "" && !cleanPath(ref.File) {
-			fs = append(fs, NewFinding("bad_path", site.Path+"/file",
+
+		hasUncleanPath := ref.File != "" && !cleanPath(ref.File)
+		if hasUncleanPath {
+			findings = append(findings, NewFinding("bad_path", location.Path+"/file",
 				fmt.Sprintf("%q is not a clean repo-relative POSIX path", ref.File),
 				"use a path relative to the repo root with forward slashes, no leading `/` and no `..`"))
 		}
-		if len(ref.Lines) == 2 && ref.Lines[0] > ref.Lines[1] {
-			fs = append(fs, NewFinding("schema_invalid", site.Path+"/lines",
+
+		isReversedSpan := ref.hasLineSpan() && ref.Lines[0] > ref.Lines[1]
+		if isReversedSpan {
+			findings = append(findings, NewFinding("schema_invalid", location.Path+"/lines",
 				fmt.Sprintf("lines [%d, %d] start after they end", ref.Lines[0], ref.Lines[1]),
 				"write lines as [start, end] with start ≤ end"))
 		}
-		if ref.Language != "" && !langs.Known(ref.Language) {
-			fs = append(fs, unknownLanguage(site.Path+"/language", ref.Language))
+
+		hasUnknownLanguage := ref.Language != "" && !langs.Known(ref.Language)
+		if hasUnknownLanguage {
+			findings = append(findings, unknownLanguage(location.Path+"/language", ref.Language))
 		}
 	}
-	return fs
+
+	return findings
 }
 
-func cleanPath(p string) bool {
-	return !strings.HasPrefix(p, "/") && !strings.Contains(p, `\`) && !badPathRe.MatchString(p) &&
-		!strings.HasPrefix(p, "./") && !strings.Contains(p, "//")
+// cleanPath reports whether path is relative to the repo root, uses forward
+// slashes and has no `.`, `..` or empty segments that could alias another
+// file or leave the repo.
+func cleanPath(path string) bool {
+	isAbsolute := strings.HasPrefix(path, "/")
+	hasBackslash := strings.Contains(path, `\`)
+	leavesDirectory := parentDirSegment.MatchString(path)
+	startsWithDot := strings.HasPrefix(path, "./")
+	hasEmptySegment := strings.Contains(path, "//")
+
+	return !isAbsolute && !hasBackslash && !leavesDirectory && !startsWithDot && !hasEmptySegment
+}
+
+func duplicateID(path, element, id string) Finding {
+	return NewFinding("duplicate_id", path,
+		fmt.Sprintf("%s id %q is used more than once", element, id),
+		fmt.Sprintf("give every %s a unique id", element))
+}
+
+func unknownNode(path, id string) Finding {
+	return NewFinding("unknown_node", path, fmt.Sprintf("no node with id %q", id),
+		"use an id from `nodes`, or add the missing node")
 }
 
 func unknownLanguage(path, name string) Finding {
 	return NewFinding("unknown_language", path, fmt.Sprintf("unknown language %q", name),
 		fmt.Sprintf("closest valid names: %s; run `change-view languages` for the full list",
-			strings.Join(langs.Closest(name, 3), ", ")))
+			strings.Join(langs.Closest(name, languageSuggestions), ", ")))
 }
 
-func escapePointer(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
+// escapePointer escapes one JSON Pointer token (RFC 6901). `~` goes first so
+// the `~1` written for `/` is not escaped again.
+func escapePointer(token string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
 }

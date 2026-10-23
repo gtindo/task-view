@@ -18,9 +18,18 @@ import (
 // that starts at a root commit.
 const EmptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+// minStatusRecordLen is the shortest porcelain v1 record that names a path:
+// two status letters, a space and at least one path byte.
+const minStatusRecordLen = len("XY p")
+
+// commitLogFields is the number of fields Log asks `git log` to print per
+// commit: full SHA, short SHA, subject, author and author date.
+const commitLogFields = 5
+
 // Available reports whether a git executable is on PATH.
 func Available() bool {
 	_, err := exec.LookPath("git")
+
 	return err == nil
 }
 
@@ -30,16 +39,19 @@ type Repo struct {
 }
 
 func (r Repo) run(args ...string) ([]byte, error) {
-	full := append([]string{"-c", "core.quotepath=off", "--no-pager"}, args...)
-	cmd := exec.Command("git", full...)
+	gitArgs := append([]string{"-c", "core.quotepath=off", "--no-pager"}, args...)
+	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = r.Dir
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
 	if err := cmd.Run(); err != nil {
 		return stdout.Bytes(), fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
+
 	return stdout.Bytes(), nil
 }
 
@@ -49,6 +61,7 @@ func Toplevel(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	return filepath.Clean(strings.TrimSpace(string(out))), nil
 }
 
@@ -58,6 +71,7 @@ func (r Repo) ResolveCommit(rev string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+
 	return strings.TrimSpace(string(out)), true
 }
 
@@ -67,6 +81,7 @@ func (r Repo) FirstParent(sha string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+
 	return strings.TrimSpace(string(out)), true
 }
 
@@ -75,22 +90,26 @@ func (r Repo) Head() (string, bool) {
 	return r.ResolveCommit("HEAD")
 }
 
-// FirstParentList lists commits along first parents, newest first.
-func (r Repo) FirstParentList(rangeSpec string, max int) ([]string, error) {
+// FirstParentList lists the commits of rangeSpec along first parents,
+// newest first. A positive maxCount caps the list; zero lists them all.
+func (r Repo) FirstParentList(rangeSpec string, maxCount int) ([]string, error) {
 	args := []string{"rev-list", "--first-parent"}
-	if max > 0 {
-		args = append(args, "--max-count="+strconv.Itoa(max))
+	if maxCount > 0 {
+		args = append(args, "--max-count="+strconv.Itoa(maxCount))
 	}
+
 	out, err := r.run(append(args, rangeSpec)...)
 	if err != nil {
 		return nil, err
 	}
+
 	return strings.Fields(string(out)), nil
 }
 
 // Exists reports whether path exists in a commit.
 func (r Repo) Exists(sha, path string) bool {
 	_, err := r.run("cat-file", "-e", sha+":"+path)
+
 	return err == nil
 }
 
@@ -106,6 +125,7 @@ func (r Repo) Diff(from, to string) ([]byte, error) {
 	if to != "" {
 		args = append(args, to)
 	}
+
 	return r.run(append(args, "--")...)
 }
 
@@ -121,19 +141,29 @@ func (r Repo) Status() ([]StatusEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var entries []StatusEntry
-	parts := strings.Split(string(out), "\x00")
-	for i := 0; i < len(parts); i++ {
-		p := parts[i]
-		if len(p) < 4 {
+
+	// With -z, a rename or copy record is followed by a separate record
+	// holding its source path, which is not an entry of its own.
+	skipSourcePath := false
+
+	for _, record := range strings.Split(string(out), "\x00") {
+		if skipSourcePath {
+			skipSourcePath = false
+
 			continue
 		}
-		e := StatusEntry{Code: p[:2], Path: p[3:]}
-		if e.Code[0] == 'R' || e.Code[0] == 'C' {
-			i++ // the source path follows
+
+		if len(record) < minStatusRecordLen {
+			continue
 		}
-		entries = append(entries, e)
+
+		entry := StatusEntry{Code: record[:2], Path: record[3:]}
+		skipSourcePath = entry.Code[0] == 'R' || entry.Code[0] == 'C'
+		entries = append(entries, entry)
 	}
+
 	return entries, nil
 }
 
@@ -143,12 +173,15 @@ func (r Repo) Untracked() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var files []string
-	for _, p := range strings.Split(string(out), "\x00") {
-		if p != "" {
-			files = append(files, p)
+
+	for _, path := range strings.Split(string(out), "\x00") {
+		if path != "" {
+			files = append(files, path)
 		}
 	}
+
 	return files, nil
 }
 
@@ -161,28 +194,43 @@ type CommitInfo struct {
 	Date    string `json:"date"`
 }
 
-// Log returns commit details for the given SHAs, in the given order.
+// Log returns commit details for the given SHAs, keyed by full SHA.
 func (r Repo) Log(shas []string) (map[string]CommitInfo, error) {
 	if len(shas) == 0 {
 		return map[string]CommitInfo{}, nil
 	}
+
+	// Unit and record separators cannot appear in a subject or author name,
+	// so they split the output safely.
 	args := append([]string{"log", "--no-walk=unsorted", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1e"}, shas...)
+
 	out, err := r.run(args...)
 	if err != nil {
 		return nil, err
 	}
+
 	infos := map[string]CommitInfo{}
-	for _, rec := range strings.Split(string(out), "\x1e") {
-		rec = strings.TrimSpace(rec)
-		if rec == "" {
+
+	for _, record := range strings.Split(string(out), "\x1e") {
+		record = strings.TrimSpace(record)
+		if record == "" {
 			continue
 		}
-		f := strings.Split(rec, "\x1f")
-		if len(f) < 5 {
+
+		fields := strings.Split(record, "\x1f")
+		if len(fields) < commitLogFields {
 			continue
 		}
-		infos[f[0]] = CommitInfo{SHA: f[0], Short: f[1], Subject: f[2], Author: f[3], Date: f[4]}
+
+		infos[fields[0]] = CommitInfo{
+			SHA:     fields[0],
+			Short:   fields[1],
+			Subject: fields[2],
+			Author:  fields[3],
+			Date:    fields[4],
+		}
 	}
+
 	return infos, nil
 }
 
@@ -192,10 +240,15 @@ func IsRepoRoot(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	a, err1 := filepath.EvalSymlinks(top)
-	b, err2 := filepath.EvalSymlinks(dir)
-	if err := errors.Join(err1, err2); err != nil {
+
+	// Git reports the physical path while dir may go through a symlink
+	// (/tmp on macOS, for example), so compare resolved paths.
+	resolvedTop, topErr := filepath.EvalSymlinks(top)
+	resolvedDir, dirErr := filepath.EvalSymlinks(dir)
+
+	if err := errors.Join(topErr, dirErr); err != nil {
 		return false, err
 	}
-	return filepath.Clean(a) == filepath.Clean(b), nil
+
+	return filepath.Clean(resolvedTop) == filepath.Clean(resolvedDir), nil
 }

@@ -18,62 +18,77 @@ type OrderedMap []KV
 
 // UnmarshalJSON reads a JSON object keeping key order.
 func (m *OrderedMap) UnmarshalJSON(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 
-	tok, err := dec.Token()
+	token, err := decoder.Token()
 	if err != nil {
 		return err
 	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
+
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
 		return fmt.Errorf("expected an object")
 	}
 
-	out := OrderedMap{}
-	for dec.More() {
-		keyTok, err := dec.Token()
+	entries := OrderedMap{}
+
+	for decoder.More() {
+		keyToken, err := decoder.Token()
 		if err != nil {
 			return err
 		}
+
 		var value any
-		if err := dec.Decode(&value); err != nil {
+		if err := decoder.Decode(&value); err != nil {
 			return err
 		}
-		out = append(out, KV{Key: keyTok.(string), Value: value})
+
+		// Inside an object the decoder only yields string keys.
+		entries = append(entries, KV{Key: keyToken.(string), Value: value})
 	}
-	*m = out
+
+	*m = entries
+
 	return nil
 }
 
 // MarshalJSON writes the entries as a JSON object in order.
 func (m OrderedMap) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	for i, kv := range m {
+	var object bytes.Buffer
+
+	object.WriteByte('{')
+
+	for i, entry := range m {
 		if i > 0 {
-			buf.WriteByte(',')
+			object.WriteByte(',')
 		}
-		k, _ := json.Marshal(kv.Key)
-		v, err := json.Marshal(kv.Value)
+
+		// Marshalling a string cannot fail.
+		key, _ := json.Marshal(entry.Key)
+
+		value, err := json.Marshal(entry.Value)
 		if err != nil {
 			return nil, err
 		}
-		buf.Write(k)
-		buf.WriteByte(':')
-		buf.Write(v)
+
+		object.Write(key)
+		object.WriteByte(':')
+		object.Write(value)
 	}
-	buf.WriteByte('}')
-	return buf.Bytes(), nil
+
+	object.WriteByte('}')
+
+	return object.Bytes(), nil
 }
 
 // String returns the value as display text.
 func (kv KV) String() string {
-	switch v := kv.Value.(type) {
+	switch value := kv.Value.(type) {
 	case string:
-		return v
+		return value
 	case json.Number:
-		return v.String()
+		return value.String()
 	default:
-		return fmt.Sprint(v)
+		return fmt.Sprint(value)
 	}
 }

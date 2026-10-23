@@ -1,14 +1,17 @@
 package review
 
-// Level of a finding.
+// Level of a finding: errors decide the exit code, warnings never do.
 type Level string
 
 const (
-	LevelError   Level = "error"
+	// LevelError marks a finding that fails the check.
+	LevelError Level = "error"
+	// LevelWarning marks a finding worth a look that does not fail the check.
 	LevelWarning Level = "warning"
 )
 
-// Reference statuses.
+// Reference statuses: every node, edge and claim ends with one of them.
+// StatusAgent marks an element without a ref, which is only displayed.
 const (
 	StatusVerified     = "verified"
 	StatusContradicted = "contradicted"
@@ -16,12 +19,17 @@ const (
 	StatusAgent        = "agent"
 )
 
-// Exit codes.
+// Exit codes, ordered by severity: the highest one among the error
+// findings wins.
 const (
-	ExitOK         = 0
+	// ExitOK means no error findings.
+	ExitOK = 0
+	// ExitReferences means the review file disagrees with the repositories.
 	ExitReferences = 1
-	ExitSchema     = 2
-	ExitEnv        = 3
+	// ExitSchema means the review file itself is invalid.
+	ExitSchema = 2
+	// ExitEnv means the environment prevents checking (no git, missing repo).
+	ExitEnv = 3
 )
 
 // Finding is one error or warning about the review file.
@@ -92,32 +100,47 @@ func NewFinding(code, path, message, hint string) Finding {
 	if !ok {
 		panic("unknown finding code " + code)
 	}
-	return Finding{Code: code, Level: info.Level, Path: path, Status: info.Status, Message: message, Hint: hint}
+
+	return Finding{
+		Code:    code,
+		Level:   info.Level,
+		Path:    path,
+		Status:  info.Status,
+		Message: message,
+		Hint:    hint,
+	}
 }
 
-// ExitCode returns the exit code for a set of findings.
+// ExitCode returns the exit code for a set of findings: the most severe exit
+// of its error findings, or ExitOK.
 func ExitCode(findings []Finding) int {
 	exit := ExitOK
-	for _, f := range findings {
-		if f.Level != LevelError {
+
+	for _, finding := range findings {
+		if finding.Level != LevelError {
 			continue
 		}
-		if code := Catalog[f.Code].Exit; code > exit {
-			exit = code
-		}
+
+		exit = max(exit, Catalog[finding.Code].Exit)
 	}
+
 	return exit
 }
 
-// Split separates errors from warnings, keeping order.
+// Split separates errors from warnings, keeping order. Both results are
+// non-nil so they encode as JSON arrays.
 func Split(findings []Finding) (errors, warnings []Finding) {
 	errors, warnings = []Finding{}, []Finding{}
-	for _, f := range findings {
-		if f.Level == LevelError {
-			errors = append(errors, f)
-		} else {
-			warnings = append(warnings, f)
+
+	for _, finding := range findings {
+		if finding.Level == LevelError {
+			errors = append(errors, finding)
+
+			continue
 		}
+
+		warnings = append(warnings, finding)
 	}
+
 	return errors, warnings
 }
