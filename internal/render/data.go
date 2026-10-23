@@ -2,9 +2,10 @@
 package render
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/gtindo/changes-view/internal/engine"
@@ -13,14 +14,23 @@ import (
 	"github.com/gtindo/changes-view/internal/review"
 )
 
-// Row is one line of a code excerpt or hunk.
+// Row is one line of a code excerpt or hunk as the page draws it. The JSON
+// keys are one letter because a page can carry thousands of rows.
 type Row struct {
-	T string `json:"t"`           // ctx, add, del, gap
-	O int    `json:"o,omitempty"` // initial-state line number
-	N int    `json:"n,omitempty"` // final-state (or read-state) line number
-	H string `json:"h"`           // highlighted HTML
-	F bool   `json:"f,omitempty"` // inside the referenced range
+	Type    string `json:"t"`           // rowContext, rowAdded, rowRemoved or rowGap
+	Old     int    `json:"o,omitempty"` // initial-state line number
+	New     int    `json:"n,omitempty"` // final-state (or read-state) line number
+	HTML    string `json:"h"`           // highlighted HTML
+	InRange bool   `json:"f,omitempty"` // inside the referenced range
 }
+
+// Row types, as app.js expects them.
+const (
+	rowContext = "ctx"
+	rowAdded   = "add"
+	rowRemoved = "del"
+	rowGap     = "gap"
+)
 
 type excerpt struct {
 	Repo      string `json:"repo"`
@@ -62,7 +72,7 @@ type repoView struct {
 	Uncommitted []string     `json:"uncommitted,omitempty"`
 }
 
-type kv struct {
+type metaPair struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
@@ -73,7 +83,7 @@ type nodeView struct {
 	Label   string            `json:"label"`
 	Change  string            `json:"change"`
 	Why     string            `json:"why,omitempty"`
-	Meta    []kv              `json:"meta,omitempty"`
+	Meta    []metaPair        `json:"meta,omitempty"`
 	Ref     *review.Ref       `json:"ref,omitempty"`
 	Result  *engine.RefResult `json:"result"`
 	Excerpt string            `json:"excerpt,omitempty"`
@@ -157,411 +167,704 @@ type viewData struct {
 	Unlisted   []engine.UnlistedRepo `json:"unlisted"`
 }
 
-const ctxLines = 3
-const maxRows = 600
+const (
+	// ctxLines is how many unchanged lines frame a referenced range or hunk.
+	ctxLines = 3
+	// siteCtxLines frames a site ref more widely than ctxLines: a site is a
+	// single line, which says little without its surroundings.
+	siteCtxLines = 4
+	// maxRows caps one excerpt or hunk so a huge file cannot bloat the page.
+	maxRows = 600
+	// shortSHALen matches Git's default abbreviated commit length.
+	shortSHALen = 7
+)
 
+// Values of engine.RefResult.StateKind other than the final state.
+const (
+	stateKindInitial = "initial"
+	stateKindAt      = "at"
+)
+
+// builder collects page data for one engine run. It owns the excerpts and a
+// highlight cache, since nodes, edges, claims and files often show the same
+// file in the same state.
 type builder struct {
-	e        *engine.Engine
-	hl       map[string][]string
-	excerpts map[string]*excerpt
+	run            *engine.Engine
+	highlightCache map[string][]string
+	excerpts       map[string]*excerpt
 }
 
-func build(e *engine.Engine, version string) *viewData {
-	b := &builder{e: e, hl: map[string][]string{}, excerpts: map[string]*excerpt{}}
-	r := e.Review
-	errs, warns := review.Split(e.Findings)
-	d := &viewData{
-		Version: version, Generated: time.Now().Format(time.RFC3339),
-		ReviewPath: e.ReviewPath, ReviewName: filepath.Base(e.ReviewPath), ExitCode: e.ExitCode,
-		Summary: r.Summary, Notes: nonNil(r.Notes), Flows: r.Flows,
-		Errors: errs, Warnings: warns, Counts: e.Summary, Unlisted: e.Unlisted,
-		Excerpts: b.excerpts,
+func build(run *engine.Engine, version string) *viewData {
+	pageBuilder := &builder{
+		run:            run,
+		highlightCache: map[string][]string{},
+		excerpts:       map[string]*excerpt{},
 	}
-	if d.Flows == nil {
-		d.Flows = []*review.Flow{}
+	rev := run.Review
+	errs, warns := review.Split(run.Findings)
+
+	view := &viewData{
+		Version:    version,
+		Generated:  time.Now().Format(time.RFC3339),
+		ReviewPath: run.ReviewPath,
+		ReviewName: filepath.Base(run.ReviewPath),
+		ExitCode:   run.ExitCode,
+		Summary:    rev.Summary,
+		Notes:      nonNil(rev.Notes),
+		Edges:      []edgeView{},
+		Flows:      nonNil(rev.Flows),
+		Claims:     []claimView{},
+		Files:      []fileView{},
+		Excerpts:   pageBuilder.excerpts,
+		Errors:     errs,
+		Warnings:   warns,
+		Counts:     run.Summary,
+		Unlisted:   run.Unlisted,
 	}
 
-	for _, s := range e.Repos {
-		d.Repos = append(d.Repos, b.repo(s))
+	for _, repoState := range run.Repos {
+		view.Repos = append(view.Repos, pageBuilder.repo(repoState))
 	}
 
-	for i, n := range r.Nodes {
-		res := e.NodeResults[i]
-		nv := nodeView{ID: n.ID, Kind: n.Kind, Label: n.Label, Change: n.Change, Why: n.Why, Ref: n.Ref, Result: res}
-		for _, m := range n.Meta {
-			nv.Meta = append(nv.Meta, kv{m.Key, m.String()})
-		}
-		if n.Ref != nil {
-			if s := e.Repo(n.Ref.Repo); s != nil && s.Repo.IsContext() {
-				nv.Context = true
-			}
-			id := "n:" + n.ID
-			if b.excerpt(id, n.Ref, res, n.Change == review.ChangeDeleted) {
-				nv.Excerpt = id
-			}
-		}
-		d.Nodes = append(d.Nodes, nv)
+	for i, node := range rev.Nodes {
+		view.Nodes = append(view.Nodes, pageBuilder.node(node, run.NodeResults[i]))
 	}
 
-	d.Edges = []edgeView{}
-	for i, ed := range r.Edges {
-		res := e.EdgeResults[i]
-		ev := edgeView{ID: fmt.Sprintf("e%d", i), From: ed.From, To: ed.To, Kind: ed.Kind, Ref: ed.Ref, Result: res}
-		if ed.Ref != nil {
-			id := "e:" + ev.ID
-			if b.excerpt(id, ed.Ref, res, false) {
-				ev.Excerpt = id
-			}
-		}
-		d.Edges = append(d.Edges, ev)
+	for i, edge := range rev.Edges {
+		view.Edges = append(view.Edges, pageBuilder.edge(i, edge, run.EdgeResults[i]))
 	}
 
-	d.Claims = []claimView{}
-	for i, c := range r.Claims {
-		cv := claimView{Text: c.Text, About: nonNil(c.About), Status: e.ClaimResults[i].Status, Evidence: []evidenceView{}}
-		for j, ev := range c.Evidence {
-			res := e.ClaimResults[i].Evidence[j]
-			x := evidenceView{Ref: ev, Result: res}
-			id := fmt.Sprintf("c:%d:%d", i, j)
-			if b.excerpt(id, ev, res, false) {
-				x.Excerpt = id
-			}
-			cv.Evidence = append(cv.Evidence, x)
-		}
-		d.Claims = append(d.Claims, cv)
+	for i, claim := range rev.Claims {
+		view.Claims = append(view.Claims, pageBuilder.claim(i, claim, run.ClaimResults[i]))
 	}
 
-	d.Files = []fileView{}
-	for _, s := range e.Repos {
-		for i, fc := range e.Coverage[s.Repo.ID] {
-			d.Files = append(d.Files, b.file(s, fc, fmt.Sprintf("f:%s:%d", s.Repo.ID, i)))
+	for _, repoState := range run.Repos {
+		for i, coverage := range run.Coverage[repoState.Repo.ID] {
+			id := fmt.Sprintf("f:%s:%d", repoState.Repo.ID, i)
+			view.Files = append(view.Files, pageBuilder.file(repoState, coverage, id))
 		}
 	}
-	return d
+
+	return view
 }
 
-func nonNil[T any](v []T) []T {
-	if v == nil {
-		return []T{}
+// nonNil makes a nil list encode as [] rather than null in the page data.
+func nonNil[Item any](items []Item) []Item {
+	if items == nil {
+		return []Item{}
 	}
-	return v
+
+	return items
 }
 
-func (b *builder) repo(s *engine.RepoState) repoView {
-	rv := repoView{ID: s.Repo.ID, Path: s.Repo.Path, Abs: s.Abs, Role: s.Repo.Role, OK: s.OK, Worktree: s.Worktree,
-		Commits: []commitView{}, Uncommitted: b.e.Uncommitted[s.Repo.ID]}
-	if s.Worktree {
-		rv.Commits = append(rv.Commits, commitView{SHA: review.Worktree, Short: "WORKTREE", Subject: "Uncommitted changes in the working tree", Worktree: true})
+func (b *builder) node(node *review.Node, result *engine.RefResult) nodeView {
+	pageNode := nodeView{
+		ID:     node.ID,
+		Kind:   node.Kind,
+		Label:  node.Label,
+		Change: node.Change,
+		Why:    node.Why,
+		Ref:    node.Ref,
+		Result: result,
 	}
-	for _, sha := range s.Commits {
-		rv.Commits = append(rv.Commits, commitInfo(s, sha))
+
+	for _, meta := range node.Meta {
+		pageNode.Meta = append(pageNode.Meta, metaPair{Key: meta.Key, Value: meta.String()})
 	}
-	if !s.OK {
-		for _, c := range s.Repo.Commits {
-			if c != review.Worktree {
-				rv.Commits = append(rv.Commits, commitView{SHA: c, Short: shortSHA(c), Subject: "(unresolved)"})
+
+	if node.Ref == nil {
+		return pageNode
+	}
+
+	refRepo := b.run.Repo(node.Ref.Repo)
+	pageNode.Context = refRepo != nil && refRepo.Repo.IsContext()
+
+	id := "n:" + node.ID
+	if b.excerpt(id, node.Ref, result) {
+		pageNode.Excerpt = id
+	}
+
+	return pageNode
+}
+
+func (b *builder) edge(edgeIndex int, edge *review.Edge, result *engine.RefResult) edgeView {
+	pageEdge := edgeView{
+		ID:     fmt.Sprintf("e%d", edgeIndex),
+		From:   edge.From,
+		To:     edge.To,
+		Kind:   edge.Kind,
+		Ref:    edge.Ref,
+		Result: result,
+	}
+
+	if edge.Ref == nil {
+		return pageEdge
+	}
+
+	id := "e:" + pageEdge.ID
+	if b.excerpt(id, edge.Ref, result) {
+		pageEdge.Excerpt = id
+	}
+
+	return pageEdge
+}
+
+func (b *builder) claim(claimIndex int, claim *review.Claim, result *engine.ClaimResult) claimView {
+	pageClaim := claimView{
+		Text:     claim.Text,
+		About:    nonNil(claim.About),
+		Status:   result.Status,
+		Evidence: []evidenceView{},
+	}
+
+	for j, ref := range claim.Evidence {
+		evidenceResult := result.Evidence[j]
+		pageEvidence := evidenceView{Ref: ref, Result: evidenceResult}
+
+		id := fmt.Sprintf("c:%d:%d", claimIndex, j)
+		if b.excerpt(id, ref, evidenceResult) {
+			pageEvidence.Excerpt = id
+		}
+
+		pageClaim.Evidence = append(pageClaim.Evidence, pageEvidence)
+	}
+
+	return pageClaim
+}
+
+func (b *builder) repo(repoState *engine.RepoState) repoView {
+	view := repoView{
+		ID:          repoState.Repo.ID,
+		Path:        repoState.Repo.Path,
+		Abs:         repoState.Abs,
+		Role:        repoState.Repo.Role,
+		OK:          repoState.OK,
+		Worktree:    repoState.Worktree,
+		Commits:     []commitView{},
+		Uncommitted: b.run.Uncommitted[repoState.Repo.ID],
+	}
+
+	if repoState.Worktree {
+		view.Commits = append(view.Commits, commitView{
+			SHA:      review.Worktree,
+			Short:    "WORKTREE",
+			Subject:  "Uncommitted changes in the working tree",
+			Worktree: true,
+		})
+	}
+
+	for _, sha := range repoState.Commits {
+		view.Commits = append(view.Commits, commitInfo(repoState, sha))
+	}
+
+	// A broken repo resolved no commits, so list the review's own SHAs to
+	// show what it asked for.
+	if !repoState.OK {
+		for _, sha := range repoState.Repo.Commits {
+			if sha == review.Worktree {
+				continue
 			}
+
+			view.Commits = append(view.Commits, commitView{SHA: sha, Short: shortSHA(sha), Subject: "(unresolved)"})
 		}
 	}
-	if s.OK && !s.Repo.IsContext() {
-		if s.Initial == gitx.EmptyTree {
-			rv.Base = &commitView{SHA: s.Initial, Short: "∅", Subject: "empty tree (change starts at the root commit)"}
+
+	hasBase := repoState.OK && !repoState.Repo.IsContext()
+	if hasBase {
+		if repoState.Initial == gitx.EmptyTree {
+			view.Base = &commitView{
+				SHA:     repoState.Initial,
+				Short:   "∅",
+				Subject: "empty tree (change starts at the root commit)",
+			}
 		} else {
-			c := commitInfo(s, s.Initial)
-			rv.Base = &c
+			base := commitInfo(repoState, repoState.Initial)
+			view.Base = &base
 		}
 	}
-	for _, f := range s.Files {
-		rv.Files++
-		rv.Added += f.Added()
-		rv.Removed += f.Removed()
+
+	for _, file := range repoState.Files {
+		view.Files++
+		view.Added += file.Added()
+		view.Removed += file.Removed()
 	}
-	return rv
+
+	return view
 }
 
-func commitInfo(s *engine.RepoState, sha string) commitView {
-	if info, ok := s.CommitLog[sha]; ok {
-		return commitView{SHA: sha, Short: info.Short, Subject: info.Subject, Author: info.Author, Date: info.Date}
+func commitInfo(repoState *engine.RepoState, sha string) commitView {
+	info, ok := repoState.CommitLog[sha]
+	if !ok {
+		return commitView{SHA: sha, Short: shortSHA(sha)}
 	}
-	return commitView{SHA: sha, Short: shortSHA(sha)}
+
+	return commitView{
+		SHA:     sha,
+		Short:   info.Short,
+		Subject: info.Subject,
+		Author:  info.Author,
+		Date:    info.Date,
+	}
 }
 
-func shortSHA(s string) string {
-	if len(s) > 7 {
-		return s[:7]
+func shortSHA(sha string) string {
+	if len(sha) > shortSHALen {
+		return sha[:shortSHALen]
 	}
-	return s
+
+	return sha
 }
 
-// highlighted returns the highlighted lines of a file in a state.
-func (b *builder) highlighted(s *engine.RepoState, state, path, language string) ([]string, *engine.Content) {
-	c := s.Read(state, path)
-	key := s.Repo.ID + "\x00" + s.StateSHA(state) + "\x00" + path + "\x00" + language
-	if h, ok := b.hl[key]; ok {
-		return h, c
+// highlighted returns the highlighted lines of a file in a state, with the
+// content they came from.
+func (b *builder) highlighted(repoState *engine.RepoState, state, path, language string) ([]string, *engine.Content) {
+	content := repoState.Read(state, path)
+
+	// NUL cannot occur in a repo id, SHA or path, so the key is unambiguous.
+	key := repoState.Repo.ID + "\x00" + repoState.StateSHA(state) + "\x00" + path + "\x00" + language
+	if lines, ok := b.highlightCache[key]; ok {
+		return lines, content
 	}
-	h := langs.Highlight(c.Lines, language)
-	b.hl[key] = h
-	return h, c
+
+	lines := langs.Highlight(content.Lines, language)
+	b.highlightCache[key] = lines
+
+	return lines, content
+}
+
+// renamedFrom is the initial path of a renamed file, or "" when the path did
+// not change.
+func renamedFrom(diff *engine.FileDiff) string {
+	if diff.OldPath == diff.Path {
+		return ""
+	}
+
+	return diff.OldPath
+}
+
+// lineSpan is an inclusive range of line numbers.
+type lineSpan struct {
+	first, last int
+}
+
+// noFocus highlights no line: it is empty, as last is before first.
+var noFocus = lineSpan{first: 0, last: -1}
+
+func (s lineSpan) contains(line int) bool {
+	return line >= s.first && line <= s.last
+}
+
+// hunkContext is the final-line window that shows a hunk with ctxLines of
+// context, before clamping to the file. A pure deletion sits between
+// NewStart and NewStart+1, so its window is centred there.
+func hunkContext(hunk *engine.Hunk) (from, to int) {
+	if hunk.PureDeletion() {
+		return hunk.NewStart - ctxLines + 1, hunk.NewStart + ctxLines
+	}
+
+	return hunk.NewStart - ctxLines, hunk.NewEnd() + ctxLines
+}
+
+// removedLines returns the hunk's removed initial lines and the final line
+// they are shown before. A pure deletion has no new lines and its NewStart
+// is the line before the gap, so they go before the next line.
+func removedLines(hunk *engine.Hunk) (anchor int, lines []int) {
+	anchor = hunk.NewStart
+	if hunk.PureDeletion() {
+		anchor = hunk.NewStart + 1
+	}
+
+	for line := hunk.OldStart; line <= hunk.OldEnd(); line++ {
+		lines = append(lines, line)
+	}
+
+	return anchor, lines
 }
 
 // diffIndex precomputes, for a file diff, which final lines are added,
 // which removed lines sit before each final line, and the old-number offset.
 type diffIndex struct {
-	added  map[int]bool
-	delsAt map[int][]int // final line before which removed (old) lines are shown
-	hunks  []*engine.Hunk
+	added         map[int]bool
+	removedBefore map[int][]int // final line before which removed (old) lines are shown
+	hunks         []*engine.Hunk
 }
 
-func indexDiff(fd *engine.FileDiff) *diffIndex {
-	ix := &diffIndex{added: map[int]bool{}, delsAt: map[int][]int{}}
-	if fd == nil {
-		return ix
+func indexDiff(diff *engine.FileDiff) *diffIndex {
+	index := &diffIndex{added: map[int]bool{}, removedBefore: map[int][]int{}}
+	if diff == nil {
+		return index
 	}
-	ix.hunks = fd.Hunks
-	for _, h := range fd.Hunks {
-		for l := h.NewStart; l <= h.NewEnd(); l++ {
-			ix.added[l] = true
+
+	index.hunks = diff.Hunks
+	for _, hunk := range diff.Hunks {
+		for line := hunk.NewStart; line <= hunk.NewEnd(); line++ {
+			index.added[line] = true
 		}
-		at := h.NewStart
-		if h.PureDeletion() {
-			at = h.NewStart + 1
-		}
-		for l := h.OldStart; l <= h.OldEnd(); l++ {
-			ix.delsAt[at] = append(ix.delsAt[at], l)
-		}
+
+		anchor, removed := removedLines(hunk)
+		index.removedBefore[anchor] = append(index.removedBefore[anchor], removed...)
 	}
-	return ix
+
+	return index
 }
 
 // oldNumber maps an unchanged final line onto its initial-state number.
-func (ix *diffIndex) oldNumber(n int) int {
-	off := 0
-	for _, h := range ix.hunks {
-		before := h.NewEnd() < n
-		if h.PureDeletion() {
-			before = h.NewStart < n
+func (index *diffIndex) oldNumber(line int) int {
+	offset := 0
+	for _, hunk := range index.hunks {
+		hunkAbove := hunk.NewEnd() < line
+		if hunk.PureDeletion() {
+			hunkAbove = hunk.NewStart < line
 		}
-		if before {
-			off += h.NewCount - h.OldCount
+
+		if hunkAbove {
+			offset += hunk.NewCount - hunk.OldCount
 		}
 	}
-	return n - off
+
+	return line - offset
 }
 
 // diffRows renders final lines [from, to] with removed lines interleaved.
-func (b *builder) diffRows(newHL, oldHL []string, ix *diffIndex, from, to int, focus [2]int) []Row {
+func diffRows(newLines, oldLines []string, index *diffIndex, from, to int, focus lineSpan) []Row {
 	var rows []Row
-	for n := from; n <= to+1; n++ {
+	for line := from; line <= to+1; line++ {
 		// Removed lines just past the window belong to it when they close
 		// the focused range or the file.
-		if n <= to || n == focus[1]+1 || n == len(newHL)+1 {
-			for _, o := range ix.delsAt[n] {
-				rows = append(rows, Row{T: "del", O: o, H: lineAt(oldHL, o), F: n >= focus[0] && n <= focus[1]+1})
+		pastWindow := line > to
+		closesFocusOrFile := line == focus.last+1 || line == len(newLines)+1
+		if !pastWindow || closesFocusOrFile {
+			// Removed lines right after the focused range are part of it.
+			removedInFocus := line >= focus.first && line <= focus.last+1
+			for _, oldLine := range index.removedBefore[line] {
+				rows = append(rows, Row{
+					Type:    rowRemoved,
+					Old:     oldLine,
+					HTML:    lineAt(oldLines, oldLine),
+					InRange: removedInFocus,
+				})
 			}
 		}
-		if n > to {
+
+		if pastWindow {
 			break
 		}
-		r := Row{T: "ctx", N: n, H: lineAt(newHL, n), F: n >= focus[0] && n <= focus[1]}
-		if ix.added[n] {
-			r.T = "add"
+
+		row := Row{Type: rowContext, New: line, HTML: lineAt(newLines, line), InRange: focus.contains(line)}
+		if index.added[line] {
+			row.Type = rowAdded
 		} else {
-			r.O = ix.oldNumber(n)
+			row.Old = index.oldNumber(line)
 		}
-		rows = append(rows, r)
+
+		rows = append(rows, row)
 	}
+
 	return rows
 }
 
-func lineAt(hl []string, n int) string {
-	if n >= 1 && n <= len(hl) {
-		return hl[n-1]
+func lineAt(lines []string, line int) string {
+	if line >= 1 && line <= len(lines) {
+		return lines[line-1]
 	}
+
 	return ""
 }
 
-// excerpt resolves the code a ref points at; it returns false when there is
-// nothing to show.
-func (b *builder) excerpt(id string, ref *review.Ref, res *engine.RefResult, deleted bool) bool {
-	s := b.e.Repo(ref.Repo)
-	if s == nil || !s.OK || ref.File == "" || res.State == "" {
+// refState is the state a ref was resolved in, from its result's state kind.
+func refState(ref *review.Ref, result *engine.RefResult) string {
+	switch result.StateKind {
+	case stateKindInitial:
+		return engine.StateInitial
+	case stateKindAt:
+		return ref.At
+	}
+
+	return engine.StateFinal
+}
+
+// excerptSource is one file in one state, ready to cut into excerpt rows.
+type excerptSource struct {
+	state    string
+	lines    []string // highlighted lines in state
+	oldLines []string // highlighted initial lines, for removed rows
+	diff     *engine.FileDiff
+	index    *diffIndex
+	// plain sources show the file as it is: a past state, a context repo or
+	// an unchanged file has no final-state diff to interleave.
+	plain bool
+}
+
+// window renders lines [from, to], clamped to the file and to maxRows;
+// truncated reports the maxRows clamp.
+func (src *excerptSource) window(from, to int, focus lineSpan) (rows []Row, truncated bool) {
+	from, to = max(1, from), min(len(src.lines), to)
+	if to-from+1 > maxRows {
+		to = from + maxRows - 1
+		truncated = true
+	}
+
+	if src.plain {
+		return src.plainRows(from, to, focus), truncated
+	}
+
+	return diffRows(src.lines, src.oldLines, src.index, from, to, focus), truncated
+}
+
+// plainRows renders lines [from, to] without interleaving. In the initial
+// state the numbers are initial ones, and lines the change removes are marked.
+func (src *excerptSource) plainRows(from, to int, focus lineSpan) []Row {
+	markRemoved := src.state == engine.StateInitial && src.diff != nil
+
+	var rows []Row
+	for line := from; line <= to; line++ {
+		row := Row{Type: rowContext, New: line, HTML: src.lines[line-1], InRange: focus.contains(line)}
+		if markRemoved {
+			row.Old, row.New = line, 0
+			removed := slices.ContainsFunc(src.diff.Hunks, func(hunk *engine.Hunk) bool {
+				return line >= hunk.OldStart && line <= hunk.OldEnd()
+			})
+			if removed {
+				row.Type = rowRemoved
+			}
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows
+}
+
+// hunkRows renders every hunk with context, trimming windows that overlap
+// the previous one and separating the others with a gap row.
+func (src *excerptSource) hunkRows() (rows []Row, truncated bool) {
+	prevEnd := 0
+	for _, hunk := range src.diff.Hunks {
+		from, to := hunkContext(hunk)
+		from = max(1, from)
+
+		switch {
+		case from <= prevEnd:
+			from = prevEnd + 1
+		case prevEnd > 0:
+			rows = append(rows, Row{Type: rowGap})
+		}
+
+		if to < from {
+			continue
+		}
+
+		windowRows, windowTruncated := src.window(from, to, noFocus)
+		rows = append(rows, windowRows...)
+		truncated = truncated || windowTruncated
+		prevEnd = min(to, len(src.lines))
+
+		if len(rows) > maxRows {
+			return rows, true
+		}
+	}
+
+	return rows, truncated
+}
+
+// afterRows lists the whole final file with added lines marked, so the page
+// can show the code after the change next to its hunks.
+func (src *excerptSource) afterRows() (rows []Row, truncated bool) {
+	for i, lineHTML := range src.lines {
+		line := i + 1
+		if line > maxRows {
+			return rows, true
+		}
+
+		row := Row{Type: rowContext, New: line, HTML: lineHTML}
+		if src.index.added[line] {
+			row.Type = rowAdded
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows, false
+}
+
+// excerpt resolves the code a ref points at and stores it under id; it
+// returns false when there is nothing to show.
+func (b *builder) excerpt(id string, ref *review.Ref, result *engine.RefResult) bool {
+	repoState := b.run.Repo(ref.Repo)
+	pointsAtFile := repoState != nil && repoState.OK && ref.File != "" && result.State != ""
+	if !pointsAtFile {
 		return false
 	}
-	language := s.Language(ref.File, ref.Language)
-	x := &excerpt{Repo: ref.Repo, File: ref.File, Language: language, State: res.State, StateKind: res.StateKind}
 
-	state := engine.StateFinal
-	switch res.StateKind {
-	case "initial":
-		state = engine.StateInitial
-	case "at":
-		state = ref.At
-	}
-	hl, content := b.highlighted(s, state, ref.File, language)
+	language := repoState.Language(ref.File, ref.Language)
+	state := refState(ref, result)
+
+	lines, content := b.highlighted(repoState, state, ref.File, language)
 	if !content.Exists {
 		return false
 	}
+
+	codeExcerpt := &excerpt{
+		Repo:      ref.Repo,
+		File:      ref.File,
+		Language:  language,
+		State:     result.State,
+		StateKind: result.StateKind,
+	}
+	b.excerpts[id] = codeExcerpt
+
 	if content.Binary {
-		x.Note = "binary file"
-		b.excerpts[id] = x
+		codeExcerpt.Note = "binary file"
+
 		return true
 	}
 
-	fd := s.Diff(ref.File)
-	if fd != nil {
-		x.OldPath = fd.OldPath
-		if fd.OldPath == fd.Path {
-			x.OldPath = ""
-		}
+	diff := repoState.Diff(ref.File)
+	if diff != nil {
+		codeExcerpt.OldPath = renamedFrom(diff)
 	}
-	plain := state != engine.StateFinal || s.Repo.IsContext() || fd == nil
 
-	var oldHL []string
-	if !plain && fd.OldPath != "" {
-		oldHL, _ = b.highlighted(s, engine.StateInitial, fd.OldPath, language)
+	src := &excerptSource{
+		state: state,
+		lines: lines,
+		diff:  diff,
+		index: indexDiff(diff),
+		plain: state != engine.StateFinal || repoState.Repo.IsContext() || diff == nil,
 	}
-	ix := indexDiff(fd)
-
-	lines := len(hl)
-	window := func(from, to int, focus [2]int) {
-		from, to = max(1, from), min(lines, to)
-		if to-from+1 > maxRows {
-			to = from + maxRows - 1
-			x.Truncated = true
-		}
-		if plain {
-			for n := from; n <= to; n++ {
-				r := Row{T: "ctx", N: n, H: hl[n-1], F: n >= focus[0] && n <= focus[1]}
-				if state == engine.StateInitial && fd != nil {
-					r.O, r.N = n, 0
-					for _, h := range fd.Hunks {
-						if n >= h.OldStart && n <= h.OldEnd() {
-							r.T = "del"
-						}
-					}
-				}
-				x.Rows = append(x.Rows, r)
-			}
-			return
-		}
-		x.Rows = append(x.Rows, b.diffRows(hl, oldHL, ix, from, to, focus)...)
+	if !src.plain && diff.OldPath != "" {
+		src.oldLines, _ = b.highlighted(repoState, engine.StateInitial, diff.OldPath, language)
 	}
 
 	switch ref.Type {
-	case review.RefRange:
-		s0, e0 := ref.Lines[0], ref.Lines[1]
-		window(s0-ctxLines, e0+ctxLines, [2]int{s0, e0})
+	case review.RefRange, review.RefHunk:
+		focus := lineSpan{first: ref.Lines[0], last: ref.Lines[1]}
+		codeExcerpt.Rows, codeExcerpt.Truncated = src.window(focus.first-ctxLines, focus.last+ctxLines, focus)
 	case review.RefSite:
 		line := ref.Line
-		if res.ActualLine > 0 {
-			line = res.ActualLine
+		if result.ActualLine > 0 {
+			line = result.ActualLine
 		}
-		window(line-4, line+4, [2]int{line, line})
-	case review.RefHunk:
-		s0, e0 := ref.Lines[0], ref.Lines[1]
-		window(s0-ctxLines, e0+ctxLines, [2]int{s0, e0})
+
+		focus := lineSpan{first: line, last: line}
+		codeExcerpt.Rows, codeExcerpt.Truncated = src.window(line-siteCtxLines, line+siteCtxLines, focus)
 	case review.RefFile:
-		switch {
-		case fd != nil && !plain && fd.Status != engine.DiffAdded && len(fd.Hunks) > 0:
-			// Changed file: every hunk with context, gaps between them.
-			prevEnd := 0
-			for _, h := range fd.Hunks {
-				from := max(1, h.NewStart-ctxLines)
-				to := h.NewEnd() + ctxLines
-				if h.PureDeletion() {
-					from, to = max(1, h.NewStart-ctxLines+1), h.NewStart+ctxLines
-				}
-				if from <= prevEnd {
-					from = prevEnd + 1
-				} else if prevEnd > 0 {
-					x.Rows = append(x.Rows, Row{T: "gap"})
-				}
-				if to < from {
-					continue
-				}
-				window(from, to, [2]int{0, -1})
-				prevEnd = min(to, lines)
-				if len(x.Rows) > maxRows {
-					x.Truncated = true
-					break
-				}
-			}
-			for n := 1; n <= lines; n++ {
-				if n > maxRows {
-					x.AfterTruncated = true
-					break
-				}
-				r := Row{T: "ctx", N: n, H: hl[n-1]}
-				if ix.added[n] {
-					r.T = "add"
-				}
-				x.After = append(x.After, r)
-			}
-		default:
-			window(1, lines, [2]int{0, -1})
+		// A changed file shows only its hunks; an added file is all new, so
+		// it is shown whole like an unchanged one.
+		showsHunks := !src.plain && diff.Status != engine.DiffAdded && len(diff.Hunks) > 0
+		if showsHunks {
+			codeExcerpt.Rows, codeExcerpt.Truncated = src.hunkRows()
+			codeExcerpt.After, codeExcerpt.AfterTruncated = src.afterRows()
+
+			break
 		}
+
+		codeExcerpt.Rows, codeExcerpt.Truncated = src.window(1, len(src.lines), noFocus)
 	}
-	b.excerpts[id] = x
+
 	return true
 }
 
-func (b *builder) file(s *engine.RepoState, fc *engine.FileCoverage, id string) fileView {
-	fd := fc.Diff
-	language := s.Language(fd.Key(), "")
-	fv := fileView{ID: id, Repo: s.Repo.ID, Path: fd.Key(), Status: fd.Status, Binary: fd.Binary, Untracked: fd.Untracked,
-		Language: language, Added: fd.Added(), Removed: fd.Removed(), Coverage: fc.Coverage,
-		FileNodes: fc.FileNodes, HasTests: fc.HasTests, Hunks: []hunkView{}}
-	if fd.OldPath != "" && fd.OldPath != fd.Path {
-		fv.OldPath = fd.OldPath
+func (b *builder) file(repoState *engine.RepoState, coverage *engine.FileCoverage, id string) fileView {
+	diff := coverage.Diff
+	language := repoState.Language(diff.Key(), "")
+
+	view := fileView{
+		ID:        id,
+		Repo:      repoState.Repo.ID,
+		Path:      diff.Key(),
+		OldPath:   renamedFrom(diff),
+		Status:    diff.Status,
+		Binary:    diff.Binary,
+		Untracked: diff.Untracked,
+		Language:  language,
+		Added:     diff.Added(),
+		Removed:   diff.Removed(),
+		Coverage:  coverage.Coverage,
+		FileNodes: coverage.FileNodes,
+		HasTests:  coverage.HasTests,
+		Hunks:     []hunkView{},
 	}
 
-	var newHL, oldHL []string
-	if !fd.Binary {
-		if fd.Status != engine.DiffDeleted {
-			newHL, _ = b.highlighted(s, engine.StateFinal, fd.Path, language)
-		}
-		if fd.OldPath != "" {
-			oldHL, _ = b.highlighted(s, engine.StateInitial, fd.OldPath, language)
-		}
-	}
-	fv.Lines = len(newHL)
-	if fd.Status == engine.DiffDeleted {
-		fv.Lines = len(oldHL)
-	}
-	ix := indexDiff(fd)
+	deleted := diff.Status == engine.DiffDeleted
 
-	for i, hc := range fc.Hunks {
-		h := hc.Hunk
-		hv := hunkView{ID: fmt.Sprintf("%s:%d", id, i), OldStart: h.OldStart, OldCount: h.OldCount, NewStart: h.NewStart,
-			NewCount: h.NewCount, Coverage: hc.Coverage, Nodes: nonNil(hc.Nodes), TestNodes: hc.TestNodes,
-			Uncovered: hc.Uncovered, OldSide: hc.OldSide, Commits: s.HunkCommits(fd.Path, h)}
-		if fd.Status == engine.DiffDeleted {
-			for l := h.OldStart; l <= h.OldEnd() && len(hv.Rows) < maxRows; l++ {
-				hv.Rows = append(hv.Rows, Row{T: "del", O: l, H: lineAt(oldHL, l)})
-			}
+	var newLines, oldLines []string
+	if !diff.Binary {
+		if !deleted {
+			newLines, _ = b.highlighted(repoState, engine.StateFinal, diff.Path, language)
+		}
+
+		if diff.OldPath != "" {
+			oldLines, _ = b.highlighted(repoState, engine.StateInitial, diff.OldPath, language)
+		}
+	}
+
+	view.Lines = len(newLines)
+	if deleted {
+		view.Lines = len(oldLines)
+	}
+
+	index := indexDiff(diff)
+	for i, hunkCoverage := range coverage.Hunks {
+		hunk := hunkCoverage.Hunk
+		pageHunk := hunkView{
+			ID:        fmt.Sprintf("%s:%d", id, i),
+			OldStart:  hunk.OldStart,
+			OldCount:  hunk.OldCount,
+			NewStart:  hunk.NewStart,
+			NewCount:  hunk.NewCount,
+			Coverage:  hunkCoverage.Coverage,
+			Nodes:     nonNil(hunkCoverage.Nodes),
+			TestNodes: hunkCoverage.TestNodes,
+			Uncovered: hunkCoverage.Uncovered,
+			OldSide:   hunkCoverage.OldSide,
+			Commits:   repoState.HunkCommits(diff.Path, hunk),
+		}
+
+		if deleted {
+			pageHunk.Rows = deletedHunkRows(hunk, oldLines)
 		} else {
-			from, to := h.NewStart-ctxLines, h.NewEnd()+ctxLines
-			if h.PureDeletion() {
-				from, to = h.NewStart-ctxLines+1, h.NewStart+ctxLines
-			}
-			from, to = max(1, from), min(len(newHL), to)
-			if to-from > maxRows {
-				to = from + maxRows
-			}
-			// Only this hunk's removed lines: limit dels to this hunk.
-			hix := &diffIndex{added: ix.added, delsAt: map[int][]int{}, hunks: ix.hunks}
-			at := h.NewStart
-			if h.PureDeletion() {
-				at = h.NewStart + 1
-			}
-			for l := h.OldStart; l <= h.OldEnd(); l++ {
-				hix.delsAt[at] = append(hix.delsAt[at], l)
-			}
-			hv.Rows = b.diffRows(newHL, oldHL, hix, from, to, [2]int{h.NewStart, h.NewEnd()})
+			pageHunk.Rows = changedHunkRows(hunk, newLines, oldLines, index)
 		}
-		fv.Hunks = append(fv.Hunks, hv)
+
+		view.Hunks = append(view.Hunks, pageHunk)
 	}
-	sort.SliceStable(fv.Hunks, func(i, j int) bool { return fv.Hunks[i].NewStart < fv.Hunks[j].NewStart })
-	return fv
+
+	slices.SortStableFunc(view.Hunks, func(left, right hunkView) int {
+		return cmp.Compare(left.NewStart, right.NewStart)
+	})
+
+	return view
+}
+
+// deletedHunkRows renders a hunk of a deleted file: removed lines only, up
+// to maxRows.
+func deletedHunkRows(hunk *engine.Hunk, oldLines []string) []Row {
+	var rows []Row
+	for line := hunk.OldStart; line <= hunk.OldEnd() && len(rows) < maxRows; line++ {
+		rows = append(rows, Row{Type: rowRemoved, Old: line, HTML: lineAt(oldLines, line)})
+	}
+
+	return rows
+}
+
+// changedHunkRows renders one hunk with context. It interleaves only this
+// hunk's removed lines, so removals of a neighbouring hunk inside the
+// context window stay with that hunk.
+func changedHunkRows(hunk *engine.Hunk, newLines, oldLines []string, index *diffIndex) []Row {
+	from, to := hunkContext(hunk)
+	from, to = max(1, from), min(len(newLines), to)
+	if to-from > maxRows {
+		to = from + maxRows
+	}
+
+	anchor, removed := removedLines(hunk)
+	hunkIndex := &diffIndex{
+		added:         index.added,
+		removedBefore: map[int][]int{anchor: removed},
+		hunks:         index.hunks,
+	}
+
+	focus := lineSpan{first: hunk.NewStart, last: hunk.NewEnd()}
+
+	return diffRows(newLines, oldLines, hunkIndex, from, to, focus)
 }
