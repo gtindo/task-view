@@ -407,3 +407,11 @@ git push origin v0.2.0
 ```
 
 `make release VERSION=0.2.0` builds the same `release/` folder locally.
+
+## License
+
+`task-view` is released under the [MIT License](LICENSE). The page embeds
+Cytoscape.js and cytoscape-elk (MIT) and ELK (Eclipse Public License 2.0);
+their licenses are in
+[internal/render/assets/vendor/LICENSES.txt](internal/render/assets/vendor/LICENSES.txt)
+and ship with every release as `THIRD_PARTY_LICENSES.txt`.

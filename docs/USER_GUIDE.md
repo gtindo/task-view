@@ -180,6 +180,8 @@ yourself. Every release has these files:
 | `TASK_REVIEW.md` | The instructions your agent follows to write the review file |
 | `SKILL.md` | The same workflow packaged as an agent skill |
 | `USER_GUIDE.md` | This guide |
+| `LICENSE` | The MIT license of `task-view` |
+| `THIRD_PARTY_LICENSES.txt` | Licenses of the libraries embedded in the page (Cytoscape.js, ELK) |
 
 macOS (Apple silicon shown; use `darwin-amd64` on Intel):
 

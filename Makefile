@@ -32,12 +32,15 @@ golden:
 docs:
 	go run ./cmd/task-view instructions > docs/TASK_REVIEW.md
 
-# Cross-compiled binaries plus the guides from docs/ and the agent skill, in
-# release/. The tag-triggered workflow in .github/workflows/release.yml
-# uploads this folder as the GitHub release.
+# Cross-compiled binaries plus the guides from docs/, the agent skill and
+# the licenses (the page embeds vendored libraries), in release/. The
+# tag-triggered workflow in .github/workflows/release.yml uploads this folder
+# as the GitHub release.
 release: docs
 	mkdir -p release
 	cp docs/TASK_REVIEW.md docs/USER_GUIDE.md skills/task-review/SKILL.md release/
+	cp LICENSE release/
+	cp internal/render/assets/vendor/LICENSES.txt release/THIRD_PARTY_LICENSES.txt
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-linux-amd64 ./cmd/task-view
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-linux-arm64 ./cmd/task-view
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-windows-amd64.exe ./cmd/task-view
