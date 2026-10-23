@@ -1,31 +1,42 @@
 # task-view
 
-**Let a coding agent hand over its work in a form you can actually inspect.**
+**Review an agent's change as a map of how it fits together, not as a flat
+list of diffs.**
 
-When a coding agent finishes a task on its own, you usually get a diff and a
-confident summary in chat. Checking that the summary is true means reading
-the whole diff yourself.
+When a coding agent writes most of the code, reviewing it means opening the
+changed files in your IDE one by one and rebuilding in your head what calls
+what, which path a request now takes, and which test covers which piece. The
+diff shows lines; the structure of the change is left for you to work out.
 
-With `task-view`, the agent hands over a structured account of the task
-instead, and you read it as one page: a graph of what changed, the flows it
-affects, a map of every changed line and the claims the agent makes. Every
-reference in it is checked against Git, so each element is marked
-**verified**, **contradicted**, **unresolved** or **the agent's word**.
+`task-view` puts that structure on the page for you. When the agent finishes
+a task, it describes its change: the functions, components and tests it
+touched, why, how they relate, and the user-visible flows they form.
+`task-view` turns that into one page you read in the browser: a graph of the
+change, its flows step by step, and each piece's code next to the agent's
+reason for it. You spend your attention judging the code, not reconstructing
+it.
 
 ![The graph view of a review: changed functions and components, grouped by repo, with the relations between them](docs/images/graph.png)
 
 ## What you get
 
-- **The change at a glance**, not a wall of diff: functions, components,
-  endpoints and tests as a graph, with the agent's reason for each change.
-- **Nothing hidden.** The diff map shows every changed line and flags any
-  that the agent didn't mention.
-- **Facts separated from the agent's word.** File, line and commit
-  references are checked; test results and explanations are labelled as
-  what the agent says.
-- **One offline HTML file per task** that you can keep or share.
-- **Safe to run anywhere.** It only reads files and runs read-only Git. It
-  never runs your tests, builds or other tooling.
+- **The relations, already drawn.** Changed functions, components, endpoints
+  and tests as a graph, across repos, so you see what connects to what
+  without holding it in your head.
+- **Flows, step by step.** Each path through the change from entry point to
+  boundary, with the tests that exercise it attached to the steps they
+  cover.
+- **Code in context.** Click any piece to read its diff, or the code as it
+  reads after the change, next to why the agent changed it and what it
+  relates to.
+- **A map you can trust.** Every file, line and commit the agent points at is
+  checked against Git, and the diff map flags changed lines the agent didn't
+  describe, so the map matches the real diff. Whether the code is right is
+  still your call: test results and explanations are shown as the agent's
+  word.
+- **One offline HTML file per task** that you can keep or share. Building it
+  only reads files and runs read-only Git; it never runs your tests, builds
+  or other tooling.
 - **Works with any coding agent** that can follow written instructions:
   Claude Code, Codex, and others.
 
@@ -124,8 +135,10 @@ The same works for work that is already committed:
 
 ## The page
 
-Every node, edge and piece of evidence is drawn with one of four statuses, the
-same way in every view:
+The page shows the same change four ways (Graph, Flows, Diff map, Claims),
+with an inspector for any piece you click. Each element also shows whether
+its pointer into the code holds, so you know which parts of the map are
+grounded in the real diff and which rest on the agent's word:
 
 | Status | Look | Meaning |
 | --- | --- | --- |
@@ -140,7 +153,7 @@ agent's summary, each repo's commits from base to final state, the findings
 and the agent's notes.
 
 The screenshots below are a real review of one commit of this repository,
-written by an agent and checked by `task-view`.
+described by an agent.
 
 ### Graph
 
@@ -243,9 +256,10 @@ flowchart LR
    `.review/generated/change-<task>.html`. Each task keeps its own file, so
    earlier reviews stay in `.review/`.
 
-The checks confirm that **the account matches the diff, never that the work
-is good**: that stays your call. The tool reads files and runs a short list of
-read-only Git commands; a test result on the page is always the agent's word.
+These checks exist so the map you read matches the real diff. They say
+nothing about whether **the work is good**: that is what the page helps you
+judge. The tool reads files and runs a short list of read-only Git commands;
+a test result on the page is always the agent's word.
 
 ## Development
 
