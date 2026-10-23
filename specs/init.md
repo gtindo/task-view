@@ -1,10 +1,10 @@
-# Change visualizer — spec
+# task-view — spec
 
 Oct 23, 2026 · @Yvan
 
 ## Idea and principles
 
-After making a change, the coding agent writes a structured account of what it did; the tool turns that account into review views, which a human reviewer uses to validate the work.
+When it finishes a task on its own, the coding agent writes a structured account of what it did; the tool turns that account into review views, which a human reviewer uses to validate the work.
 
 The tool's checks serve one purpose: making sure the review file matches exactly what changed, so the agent can correct it before the human looks. They validate the account, never the work; judging the work is the reviewer's job, done through the views.
 
@@ -40,27 +40,27 @@ The visualizer is a local review aid for a human reading an agent's change, acro
 The whole loop runs on the developer's machine in five steps, with no state kept between reviews except the input file.
 
 1. **Agent makes the change** in one or more local repos, including tests, and runs whatever it normally runs.
-2. **Agent writes the input** `.review/change.json` in the main repo (or a path you choose), following the agent context file. For each repo it records the commits of the change, newest first, so every reference points at an exact state.
-3. **Agent validates** with `change-view validate .review/change.json --format json`, fixes every error, and repeats until the exit code is 0 and no unmentioned\_hunk warning remains (or each remaining one is explained in notes).
-4. **Developer runs** `change-view open .review/change.json`. The binary resolves and verifies every reference using only the filesystem and Git, in seconds.
-5. **Browser opens** a single static HTML page. The developer reviews, and can ask the agent to revise the change or the account. A new `change.json` reopens a fresh view; the previous one can be kept for comparison.
+2. **Agent writes the input** `.review/change-<task>.json` in the main repo (or a path you choose), following the agent context file. `<task>` names the task, so several reviews can sit side by side in `.review/`. For each repo it records the commits of the change, newest first, so every reference points at an exact state.
+3. **Agent validates** with `task-view validate .review/change-<task>.json --format json`, fixes every error, and repeats until the exit code is 0 and no unmentioned\_hunk warning remains (or each remaining one is explained in notes).
+4. **Developer runs** `task-view open .review/change-<task>.json`. The binary resolves and verifies every reference using only the filesystem and Git, in seconds.
+5. **Browser opens** a single static HTML page. The developer reviews, and can ask the agent to revise the change or the account. The agent rewrites the same file for a revision and `open` regenerates the page; reviews of earlier tasks stay in their own files.
 
 The binary is read-only: it reads files and runs a fixed set of read-only Git subcommands (listed under implementation notes). Nothing else is executed.
 
 ## Binary
 
-The visualizer ships as one static Go binary, `change-view`, with no runtime dependency except the `git` executable already present on any machine that has the repos.
+The visualizer ships as one static Go binary, `task-view`, with no runtime dependency except the `git` executable already present on any machine that has the repos.
 
 ### Commands
 
 | Command | What it does | Used by |
 | --- | --- | --- |
-| `change-view validate <file> [--format text\|json] [--scan-siblings]` | Schema validation, then chain, reference and diff-level checks. No browser. Exit codes below | Agent, after writing the review file |
-| `change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Runs the same checks, then writes one self-contained HTML file (default: a temp folder) and opens it in the default browser. Exit 2 or 3: no page, prints the errors. Exit 1: page is generated with a red banner listing the errors, so a reviewer still sees the account | Developer |
-| `change-view schema` | Prints the JSON Schema of the review file | Agent, editors |
-| `change-view languages` | Prints valid language names, one per line, with their usual file extensions | Agent |
-| `change-view instructions` | Prints the agent context file matching this binary's schema version | Developer, to install or refresh the context file |
-| `change-view version` | Binary version and supported schema versions | Both |
+| `task-view validate <file> [--format text\|json] [--scan-siblings]` | Schema validation, then chain, reference and diff-level checks. No browser. Exit codes below | Agent, after writing the review file |
+| `task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Runs the same checks, then writes one self-contained HTML file (default: `generated/<name>.html` next to the review file, so `.review/generated/change-<task>.html`) and opens it in the default browser. Exit 2 or 3: no page, prints the errors. Exit 1: page is generated with a red banner listing the errors, so a reviewer still sees the account | Developer |
+| `task-view schema` | Prints the JSON Schema of the review file | Agent, editors |
+| `task-view languages` | Prints valid language names, one per line, with their usual file extensions | Agent |
+| `task-view instructions` | Prints the agent context file matching this binary's schema version | Developer, to install or refresh the context file |
+| `task-view version` | Binary version and supported schema versions | Both |
 
 The review file path may be absolute or relative to the current directory. Repo paths inside it are resolved as described in the schema rules.
 
@@ -134,7 +134,7 @@ The agent declares the language of the files it references, only so views can sh
 
 - **Per repo:** `repos[].languages` maps glob patterns to language names, matched against repo-relative paths, first match wins: `{ "**/*.tsx": "tsx", "**/*.ts": "typescript", "**/*.go": "go" }`.
 - **Per ref:** any `file`, `range`, `site` or `hunk` ref may set `language` to override the repo mapping, for example an extensionless script or a template.
-- **Names:** the lexer names of the bundled highlighter, printed by `change-view languages`.
+- **Names:** the lexer names of the bundled highlighter, printed by `task-view languages`.
 - **Validation:** an unknown name is an error `unknown_language`, with the closest valid names as hint. A referenced file that matches no pattern is a warning `no_language`; it is shown as plain text.
 
 ### Schema rules
@@ -342,25 +342,30 @@ The page is one self-contained HTML file (renderer, styles, highlighted code and
 
 ## Agent context file
 
-The agent learns the format from one file, `CHANGE_REVIEW.md`, printed by `change-view instructions` and referenced from the project's `CLAUDE.md` or `AGENTS.md` (for example a line `@CHANGE_REVIEW.md` or "After any code change, follow CHANGE\_REVIEW.md"). Its full content for schema version 1:
+The agent learns the format from one file, `TASK_REVIEW.md`, printed by `task-view instructions` and referenced from the project's `CLAUDE.md` or `AGENTS.md` (for example a line `@TASK_REVIEW.md` or "When you finish a task, follow TASK\_REVIEW.md"). Its full content for schema version 1:
 
 ```markdown
-# Change review file
+# Task review file
 
-After you finish a change, write a review file so a human can review it with
-`change-view`. The file describes what you changed and why, as a small graph.
+When you finish a task, write a review file so a human can review your work
+with `task-view`. The file describes what you changed and why, as a small
+graph.
 The tool checks every reference you give against the files and Git; anything
 without a reference is shown as "agent says". Be precise, not persuasive.
 
 ## When
 
-- Once the change is complete, never during the work.
-- Rewrite the whole file after any further change; do not patch it.
+- Once the task is complete, never during the work or after each edit.
+- If you change more for the same task, rewrite its whole file; do not patch
+  it.
 
 ## Where
 
-`.review/change.json` in the repo where the task started, unless told otherwise.
-Add `.review/` to `.git/info/exclude` if it is not ignored already.
+`.review/change-<task>.json` in the repo where the task started, unless told
+otherwise. `<task>` is a short kebab-case name for the task, for example
+`change-rate-limit-login.json`: one file per task, so earlier reviews stay
+next to it. Add `.review/` to `.git/info/exclude` if it is not ignored
+already.
 
 ## Steps
 
@@ -368,7 +373,7 @@ Add `.review/` to `.git/info/exclude` if it is not ignored already.
    instructions (CLAUDE.md, AGENTS.md, CONTRIBUTING) or the user tell you
    to; otherwise leave changes uncommitted. The review covers them through
    the `WORKTREE` entry (step 3).
-2. Run `change-view schema` if you need the exact JSON Schema.
+2. Run `task-view schema` if you need the exact JSON Schema.
 3. List every repo in `repos`, with `path` relative to this file's repo:
    - repos you changed: `commits` = full SHAs of the change, ordered from
      last to first: `git rev-list --first-parent <start>..HEAD`, where
@@ -387,11 +392,12 @@ Add `.review/` to `.git/info/exclude` if it is not ignored already.
    Every hunk must fall inside a node's `range` or `file` ref.
    Line numbers in refs are read at `commits[0]` (on disk for `WORKTREE`).
 5. Write nodes, edges, flows, claims and notes (rules below).
-6. Run `change-view validate .review/change.json --format json`.
+6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
    `unmentioned_hunk` warning. Repeat until exit code 0 and no
    `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
-8. Tell the user: `change-view open .review/change.json`.
+8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
+   page to `.review/generated/change-<task>.html`.
 
 ## Nodes
 
@@ -419,7 +425,7 @@ Endpoints, queues and external services get a node without `ref`.
 Set `languages` on each repo you reference, context repos included: glob to language name,
 first match wins, e.g. `{ "**/*.tsx": "tsx", "**/*.ts": "typescript" }`.
 Cover every file you reference. For a file the globs can't describe, add
-`"language"` on its ref. Valid names: `change-view languages`.
+`"language"` on its ref. Valid names: `task-view languages`.
 
 ## Edges
 
@@ -469,7 +475,7 @@ The file is embedded in the binary, versioned with the schema, and is the only d
 
 Three steps, each usable on its own: step 1 lets agents produce accurate review files, step 2 gives reviewers the views, step 3 polishes.
 
-1. **Validator binary.** Go module, embedded JSON Schema, `schema`, `languages`, `instructions`, `version`, and `validate`: schema rules, chain checks including `WORKTREE`, all reference types (`file`, `range`, `site`, `hunk`, `commit`), diff-level checks, the full code catalog, JSON and text output, exit codes. Fixture repos and golden tests per code. `CHANGE_REVIEW.md` embedded. Exit: an agent produces a file that validates on a real multi-repo change with uncommitted work.
+1. **Validator binary.** Go module, embedded JSON Schema, `schema`, `languages`, `instructions`, `version`, and `validate`: schema rules, chain checks including `WORKTREE`, all reference types (`file`, `range`, `site`, `hunk`, `commit`), diff-level checks, the full code catalog, JSON and text output, exit codes. Fixture repos and golden tests per code. `TASK_REVIEW.md` embedded. Exit: an agent produces a file that validates on a real multi-repo change with uncommitted work.
 2. **`open` with views.** Embedded template, Cytoscape.js with ELK, Chroma highlighting; header, graph with repo grouping, flow lanes, diff map, claims panel, node detail panel; error banner for exit 1. Exit: a reviewer can validate a real change from the page alone.
 3. **Extras.** Side-by-side comparison of two review files, per-commit filtering in the diff map, release pipeline with GoReleaser and a Homebrew tap.
 
@@ -477,7 +483,7 @@ Three steps, each usable on its own: step 1 lets agents produce accurate review 
 
 | Question | Decision for v1 |
 | --- | --- |
-| Where the review file lives for a multi-repo change | `.review/change.json` in the repo where the task started; any path works since repo paths resolve from the Git root containing the file |
+| Where the review file lives for a multi-repo change | `.review/change-<task>.json` in the repo where the task started; any path works since repo paths resolve from the Git root containing the file |
 | Do endpoint nodes get a check | No. Endpoints stay agent statements; each `serves`, `mocks` and `requests` edge is checked through its own `site` ref, which already shows whether each side exists |
 | `site` tolerance | Exact `line` expected; ±2 lines accepted with a `site_offset` warning so the agent corrects it; beyond that `site_mismatch` |
 | Flows without an entry node | Allowed, no warning: `kind` values carry no meaning for checks except `test`. Views draw the flow from its first node |

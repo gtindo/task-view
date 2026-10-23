@@ -1,4 +1,4 @@
-// Package gitx runs the fixed set of read-only Git subcommands change-view
+// Package gitx runs the fixed set of read-only Git subcommands task-view
 // is allowed to use. Every call sets GIT_OPTIONAL_LOCKS=0 so nothing is
 // written to the repositories.
 package gitx

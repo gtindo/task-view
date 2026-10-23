@@ -1,8 +1,8 @@
 version: 2
-project_name: change-view
+project_name: task-view
 builds:
-  - main: ./cmd/change-view
-    binary: change-view
+  - main: ./cmd/task-view
+    binary: task-view
     env: [CGO_ENABLED=0]
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
@@ -15,9 +15,9 @@ archives:
 checksum:
   name_template: checksums.txt
 brews:
-  - name: change-view
+  - name: task-view
     repository:
       owner: gtindo
       name: homebrew-tap
-    description: Review views for a coding agent's change, checked against Git.
-    install: bin.install "change-view"
+    description: Review views for a coding agent's finished task, checked against Git.
+    install: bin.install "task-view"

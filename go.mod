@@ -1,4 +1,4 @@
-module github.com/gtindo/changes-view
+module github.com/gtindo/task-view
 
 go 1.26.3
 

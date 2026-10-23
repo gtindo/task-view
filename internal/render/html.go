@@ -7,7 +7,7 @@ import (
 	"html"
 	"strings"
 
-	"github.com/gtindo/changes-view/internal/engine"
+	"github.com/gtindo/task-view/internal/engine"
 )
 
 //go:embed assets/index.html assets/app.css assets/app.js assets/vendor/cytoscape.min.js assets/vendor/elk.bundled.js assets/vendor/cytoscape-elk.js
@@ -30,7 +30,7 @@ func script(js string) string {
 }
 
 // HTML renders the self-contained review page for a finished engine run.
-// version is the change-view version recorded in the page data.
+// version is the task-view version recorded in the page data.
 func HTML(run *engine.Engine, version string) ([]byte, error) {
 	data := build(run, version)
 

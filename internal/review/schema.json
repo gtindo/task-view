@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/gtindo/changes-view/schema/v1/change.json",
-  "title": "change-view review file",
-  "description": "A coding agent's structured account of a change, checked by change-view against the filesystem and Git.",
+  "$id": "https://github.com/gtindo/task-view/schema/v1/change.json",
+  "title": "task-view review file",
+  "description": "A coding agent's structured account of a change, checked by task-view against the filesystem and Git.",
   "type": "object",
   "required": ["version", "summary", "repos", "nodes"],
   "additionalProperties": false,

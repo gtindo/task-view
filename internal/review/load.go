@@ -16,20 +16,20 @@ import (
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 
-	"github.com/gtindo/changes-view/internal/langs"
+	"github.com/gtindo/task-view/internal/langs"
 )
 
 // SchemaJSON is the JSON Schema of the review file. Parse validates against
-// it and `change-view schema` prints it so agents can check their output.
+// it and `task-view schema` prints it so agents can check their output.
 //
 //go:embed schema.json
 var SchemaJSON []byte
 
-const schemaURL = "https://github.com/gtindo/changes-view/schema/v1/change.json"
+const schemaURL = "https://github.com/gtindo/task-view/schema/v1/change.json"
 
 // schemaHint points an agent at the full schema when a finding cannot name
 // the exact rule it broke.
-const schemaHint = "run `change-view schema` for the exact JSON Schema"
+const schemaHint = "run `task-view schema` for the exact JSON Schema"
 
 // languageSuggestions is how many close names an unknown language finding
 // suggests.
@@ -159,7 +159,7 @@ func checkVersion(instance any) (Finding, bool) {
 
 	return NewFinding("unsupported_version", "/version",
 		fmt.Sprintf("version %s is not supported by this binary", version),
-		fmt.Sprintf("use \"version\": %d; run `change-view version` for supported versions", SchemaVersion)), false
+		fmt.Sprintf("use \"version\": %d; run `task-view version` for supported versions", SchemaVersion)), false
 }
 
 // schemaFindings flattens a validation error into one finding per leaf
@@ -465,7 +465,7 @@ func unknownNode(path, id string) Finding {
 
 func unknownLanguage(path, name string) Finding {
 	return NewFinding("unknown_language", path, fmt.Sprintf("unknown language %q", name),
-		fmt.Sprintf("closest valid names: %s; run `change-view languages` for the full list",
+		fmt.Sprintf("closest valid names: %s; run `task-view languages` for the full list",
 			strings.Join(langs.Closest(name, languageSuggestions), ", ")))
 }
 

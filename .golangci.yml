@@ -48,7 +48,7 @@ linters:
             - "$all"
             - "!**/internal/gitx/**"
             - "!**/internal/fixture/**"
-            - "!**/cmd/change-view/**"
+            - "!**/cmd/task-view/**"
           deny:
             - pkg: os/exec
               desc: only internal/gitx runs commands (read-only by design)
@@ -58,35 +58,35 @@ linters:
             - "**/internal/langs/**"
             - "**/internal/instructions/**"
           deny:
-            - pkg: github.com/gtindo/changes-view/internal
+            - pkg: github.com/gtindo/task-view/internal
               desc: gitx, langs and instructions depend on nothing internal
         review:
           files:
             - "**/internal/review/**"
           deny:
-            - pkg: github.com/gtindo/changes-view/internal/engine
+            - pkg: github.com/gtindo/task-view/internal/engine
               desc: review depends only on langs
-            - pkg: github.com/gtindo/changes-view/internal/render
+            - pkg: github.com/gtindo/task-view/internal/render
               desc: review depends only on langs
-            - pkg: github.com/gtindo/changes-view/internal/gitx
+            - pkg: github.com/gtindo/task-view/internal/gitx
               desc: review depends only on langs
-            - pkg: github.com/gtindo/changes-view/internal/fixture
+            - pkg: github.com/gtindo/task-view/internal/fixture
               desc: fixture is for tests only
         engine:
           files:
             - "**/internal/engine/**"
             - "!$test"
           deny:
-            - pkg: github.com/gtindo/changes-view/internal/render
+            - pkg: github.com/gtindo/task-view/internal/render
               desc: engine never depends on the page
-            - pkg: github.com/gtindo/changes-view/internal/fixture
+            - pkg: github.com/gtindo/task-view/internal/fixture
               desc: fixture is for tests only
         render:
           files:
             - "**/internal/render/**"
             - "!$test"
           deny:
-            - pkg: github.com/gtindo/changes-view/internal/fixture
+            - pkg: github.com/gtindo/task-view/internal/fixture
               desc: fixture is for tests only
 
   exclusions:

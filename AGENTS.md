@@ -1,7 +1,7 @@
-# change-view: agent working agreement
+# task-view: agent working agreement
 
-`change-view` is a Go CLI that checks a coding agent's review file
-(`.review/change.json`) against the filesystem and Git and renders review
+`task-view` is a Go CLI that checks a coding agent's review file
+(`.review/change-<task>.json`, written when it finishes a task) against the filesystem and Git and renders review
 views. `specs/init.md` is the source of truth; read it before changing
 behaviour. `README.md` describes layout and commands.
 
@@ -13,7 +13,7 @@ behaviour. `README.md` describes layout and commands.
 - Every finding uses a code from the catalog in `internal/review/findings.go`
   and carries a hint written for an agent to act on.
 - The page is one offline HTML file: no network at view time.
-- `CHANGE_REVIEW.md` in `internal/instructions` is the agent context file from
+- `TASK_REVIEW.md` in `internal/instructions` is the agent context file from
   the spec; keep it in sync with the schema version.
 - `make check` (vet, lint, test) must pass. Lint enforces most of the code
   rules below; every change ends with a self-review of its diff against them.
@@ -22,14 +22,14 @@ behaviour. `README.md` describes layout and commands.
 
 | Command | What it does |
 | --- | --- |
-| `make build` | Builds `bin/change-view` |
-| `make install` | Installs `change-view` into `$(go env GOPATH)/bin` |
+| `make build` | Builds `bin/task-view` |
+| `make install` | Installs `task-view` into `$(go env GOPATH)/bin` |
 | `make test` | Unit tests and golden tests on generated fixture repos |
 | `make vet` | `go vet` and the `gofmt` check |
 | `make lint` | golangci-lint (`.golangci.yml`) and ESLint on `app.js` (`eslint.config.mjs`, run through `npx`) |
 | `make check` | `vet`, `lint` and `test` |
-| `make golden` | Rewrites `cmd/change-view/testdata/valid.golden.json` after an intended output change |
-| `make docs` | Regenerates `docs/CHANGE_REVIEW.md` from `internal/instructions` |
+| `make golden` | Rewrites `cmd/task-view/testdata/valid.golden.json` after an intended output change |
+| `make docs` | Regenerates `docs/TASK_REVIEW.md` from `internal/instructions` |
 | `make release` | Cross-compiled binaries, guides from `docs/` and checksums in `release/` |
 | `make clean` | Removes build and release output |
 
@@ -37,9 +37,9 @@ behaviour. `README.md` describes layout and commands.
 
 `gitx`, `langs` and `instructions` depend on nothing internal; `review` →
 `langs`; `engine` → `review`, `gitx`, `langs`; `render` → `engine`, `review`,
-`gitx`, `langs`; `fixture` is for tests only; `cmd/change-view` wires
+`gitx`, `langs`; `fixture` is for tests only; `cmd/task-view` wires
 everything. Only `gitx` runs Git: `os/exec` is allowed in `gitx`, `fixture`
-and `cmd/change-view` (to open the browser) and nowhere else.
+and `cmd/task-view` (to open the browser) and nowhere else.
 
 ## Code rules
 

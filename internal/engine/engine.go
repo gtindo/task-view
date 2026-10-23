@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gtindo/changes-view/internal/gitx"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/gitx"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // Coverage statuses of a hunk or a file.

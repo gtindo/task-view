@@ -396,7 +396,7 @@
 
     return el("header", { class: "topbar" },
       sidebarButton,
-      el("div", { class: "brand" }, el("span", { class: "brand-mark", html: icon("logo") }), "change-view"),
+      el("div", { class: "brand" }, el("span", { class: "brand-mark", html: icon("logo") }), "task-view"),
       el("div", { class: "crumbs" },
         el("span", { class: "sep" }, "/"),
         el("span", { class: "path", title: reviewData.reviewPath }, repoNames),
@@ -527,7 +527,7 @@
     }
 
     panel.appendChild(el("section", { class: "sb-section muted", style: { fontSize: "11.5px" } },
-      `Generated ${new Date(reviewData.generated).toLocaleString()} · change-view ${reviewData.version}`));
+      `Generated ${new Date(reviewData.generated).toLocaleString()} · task-view ${reviewData.version}`));
 
     return panel;
   }

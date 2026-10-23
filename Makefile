@@ -5,10 +5,10 @@ ESLINT := npx --yes eslint@10.12.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 build:
-	go build -o bin/change-view ./cmd/change-view
+	go build -o bin/task-view ./cmd/task-view
 
 install:
-	go install ./cmd/change-view
+	go install ./cmd/task-view
 
 test:
 	go test ./...
@@ -25,21 +25,21 @@ lint:
 check: vet lint test
 
 golden:
-	go test ./cmd/change-view -run TestValidReviewGolden -update
+	go test ./cmd/task-view -run TestValidReviewGolden -update
 
-# docs/CHANGE_REVIEW.md is generated from the embedded copy in
+# docs/TASK_REVIEW.md is generated from the embedded copy in
 # internal/instructions so the two never drift; edit that one instead.
 docs:
-	go run ./cmd/change-view instructions > docs/CHANGE_REVIEW.md
+	go run ./cmd/task-view instructions > docs/TASK_REVIEW.md
 
 # Cross-compiled binaries plus the guides from docs/, in release/.
 release: docs
 	mkdir -p release
-	cp docs/CHANGE_REVIEW.md docs/USER_GUIDE.md release/
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/change-view-linux-amd64 ./cmd/change-view
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/change-view-darwin-amd64 ./cmd/change-view
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/change-view-darwin-arm64 ./cmd/change-view
-	cd release && shasum -a 256 change-view-* > SHA256SUMS
+	cp docs/TASK_REVIEW.md docs/USER_GUIDE.md release/
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-linux-amd64 ./cmd/task-view
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-darwin-amd64 ./cmd/task-view
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-darwin-arm64 ./cmd/task-view
+	cd release && shasum -a 256 task-view-* > SHA256SUMS
 
 clean:
 	rm -rf bin dist release

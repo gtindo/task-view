@@ -1,7 +1,7 @@
-# change-view
+# task-view
 
-After a coding agent makes a change, it writes a structured account of what it
-did (`.review/change.json`). `change-view` checks that account against the
+When a coding agent finishes a task on its own, it writes a structured account
+of what it did (`.review/change-<task>.json`). `task-view` checks that account against the
 repos — every reference, every hunk — and turns it into one self-contained
 HTML page for the human reviewer: a graph of the change, flows, a diff map and
 claims, with every element marked as **verified**, **contradicted**,
@@ -14,10 +14,10 @@ read-only Git; it never runs tests, builds or language tooling. See
 ## Install
 
 ```bash
-go install github.com/gtindo/changes-view/cmd/change-view@latest
+go install github.com/gtindo/task-view/cmd/task-view@latest
 ```
 
-From a checkout: `make install` (puts `change-view` in `$(go env GOPATH)/bin`).
+From a checkout: `make install` (puts `task-view` in `$(go env GOPATH)/bin`).
 The only runtime dependency is `git`.
 
 ## Use it with an agent
@@ -26,41 +26,44 @@ The only runtime dependency is `git`.
    agent at it:
 
    ```bash
-   change-view instructions > CHANGE_REVIEW.md
+   task-view instructions > TASK_REVIEW.md
    ```
 
    Then add a line to that repo's `AGENTS.md` or `CLAUDE.md`:
-   `After any code change, follow CHANGE_REVIEW.md.`
-   (Or skip the file and just tell the agent: "run `change-view instructions`
-   and write a review file for this change.")
+   `When you finish a task, follow TASK_REVIEW.md.`
+   (Or skip the file and just tell the agent: "run `task-view instructions`
+   and write a review file for this task.")
 
-2. Ask the agent to make a change. When it is done it writes
-   `.review/change.json`, runs `change-view validate .review/change.json --format json`
-   and fixes the file until it validates.
+2. Give the agent a task and let it work. When it is done it writes
+   `.review/change-<task>.json`, runs
+   `task-view validate .review/change-<task>.json --format json` and fixes the
+   file until it validates.
 
 3. Review:
 
    ```bash
-   change-view open .review/change.json
+   task-view open .review/change-<task>.json
    ```
 
-   The page opens in your browser. Ask the agent to revise the change or the
-   account; a new `change.json` gives a fresh page.
+   The page is written to `.review/generated/change-<task>.html` and opens in
+   your browser. Ask the agent to revise the change or the account; it
+   rewrites the same file and `open` gives a fresh page. Each task keeps its
+   own file, so earlier reviews stay in `.review/`.
 
 You can also ask an agent to describe an existing commit: "Run
-`change-view instructions` and write `.review/change.json` for commit
+`task-view instructions` and write `.review/change-<name>.json` for commit
 `<sha>`."
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `change-view validate <file> [--format text\|json] [--scan-siblings]` | Schema, commit chain, reference and diff-level checks. Exit 0 ok, 1 contradicted/unresolved refs, 2 invalid file, 3 environment error |
-| `change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Same checks, then writes one offline HTML page and opens it. Exit 1 still renders the page, with a red banner |
-| `change-view schema` | JSON Schema of the review file |
-| `change-view languages` | Valid language names and their usual file patterns |
-| `change-view instructions` | The agent context file for this binary's schema version |
-| `change-view version` | Binary and supported schema versions |
+| `task-view validate <file> [--format text\|json] [--scan-siblings]` | Schema, commit chain, reference and diff-level checks. Exit 0 ok, 1 contradicted/unresolved refs, 2 invalid file, 3 environment error |
+| `task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Same checks, then writes one offline HTML page (default `generated/<name>.html` next to the review file) and opens it. Exit 1 still renders the page, with a red banner |
+| `task-view schema` | JSON Schema of the review file |
+| `task-view languages` | Valid language names and their usual file patterns |
+| `task-view instructions` | The agent context file for this binary's schema version |
+| `task-view version` | Binary and supported schema versions |
 
 Only the repos listed in the review file are read. `--scan-siblings` also
 looks at the folders next to them and warns (`unlisted_repo`) about Git repos
@@ -91,20 +94,20 @@ dark.
 
 ```bash
 make test    # unit tests and golden tests on generated fixture repos
-make build   # bin/change-view
+make build   # bin/task-view
 make check   # vet, lint (golangci-lint, ESLint via npx) and test
 ```
 
 Code rules and package boundaries are in [AGENTS.md](AGENTS.md).
 
-Layout: `cmd/change-view` (CLI), `internal/review` (model, embedded JSON
+Layout: `cmd/task-view` (CLI), `internal/review` (model, embedded JSON
 Schema, structural rules), `internal/engine` (Git states, diff, reference and
 coverage checks), `internal/render` (view data and the embedded page:
 `assets/app.js`, `assets/app.css`, vendored Cytoscape.js + ELK),
 `internal/langs` (Chroma lexers and highlighting), `internal/instructions`
-(`CHANGE_REVIEW.md`), `internal/fixture` (test repos), `docs` (the user
-guide and a copy of `CHANGE_REVIEW.md` regenerated by `make docs`).
+(`TASK_REVIEW.md`), `internal/fixture` (test repos), `docs` (the user
+guide and a copy of `TASK_REVIEW.md` regenerated by `make docs`).
 
 Golden output for the accurate fixture review lives in
-`cmd/change-view/testdata/valid.golden.json`; refresh it with
-`go test ./cmd/change-view -update`.
+`cmd/task-view/testdata/valid.golden.json`; refresh it with
+`go test ./cmd/task-view -update`.

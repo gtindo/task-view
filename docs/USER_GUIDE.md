@@ -1,8 +1,9 @@
-# change-view user guide
+# task-view user guide
 
-`change-view` helps you review a change made by a coding agent. When the agent
-finishes, it writes a structured account of what it did (`.review/change.json`).
-`change-view` checks that account against your repos and turns it into one HTML
+`task-view` helps you review the work a coding agent did on a task on its own.
+When the agent finishes the task, it writes a structured account of what it
+did (`.review/change-<task>.json`).
+`task-view` checks that account against your repos and turns it into one HTML
 page you read in the browser: a graph of the change, the flows it touches, a
 map of every changed line, and the claims the agent makes, each marked as a
 checked fact or as the agent's word.
@@ -10,105 +11,108 @@ checked fact or as the agent's word.
 The checks only confirm that the account matches the diff. They never say
 whether the code is good: that is your job, and the page is there to make it
 faster. The tool reads files and runs read-only Git commands. It never runs
-your tests, builds or linters, and it never writes to your repos.
+your tests, builds or linters. The only file it writes is the page, in
+`.review/generated/` unless you choose another path.
 
 ## Contents of this folder
 
 | File | What it is |
 | --- | --- |
-| `change-view-darwin-arm64` | macOS on Apple silicon (M1 and later) |
-| `change-view-darwin-amd64` | macOS on Intel |
-| `change-view-linux-amd64` | Linux x86-64 (static, no dependencies) |
+| `task-view-darwin-arm64` | macOS on Apple silicon (M1 and later) |
+| `task-view-darwin-amd64` | macOS on Intel |
+| `task-view-linux-amd64` | Linux x86-64 (static, no dependencies) |
 | `SHA256SUMS` | Checksums of the three binaries |
-| `CHANGE_REVIEW.md` | The instructions your agent follows to write the review file |
+| `TASK_REVIEW.md` | The instructions your agent follows to write the review file |
 | `USER_GUIDE.md` | This guide |
 
-The only thing `change-view` needs at run time is `git` on your `PATH`.
+The only thing `task-view` needs at run time is `git` on your `PATH`.
 
 ## 1. Install
 
-Pick the binary for your machine, rename it `change-view` and put it on your
+Pick the binary for your machine, rename it `task-view` and put it on your
 `PATH`.
 
 macOS (Apple silicon shown; use `darwin-amd64` on Intel):
 
 ```bash
-sudo install -m 755 change-view-darwin-arm64 /usr/local/bin/change-view
+sudo install -m 755 task-view-darwin-arm64 /usr/local/bin/task-view
 ```
 
 If macOS blocks the binary because it was downloaded ("cannot be opened because
 the developer cannot be verified"), clear the quarantine flag once:
 
 ```bash
-sudo xattr -d com.apple.quarantine /usr/local/bin/change-view
+sudo xattr -d com.apple.quarantine /usr/local/bin/task-view
 ```
 
 Linux:
 
 ```bash
-sudo install -m 755 change-view-linux-amd64 /usr/local/bin/change-view
+sudo install -m 755 task-view-linux-amd64 /usr/local/bin/task-view
 ```
 
-To install without `sudo`, copy it to `~/.local/bin/change-view` (or any folder
+To install without `sudo`, copy it to `~/.local/bin/task-view` (or any folder
 on your `PATH`) and `chmod +x` it.
 
 Check it works and, optionally, the checksum:
 
 ```bash
-change-view version
+task-view version
 shasum -a 256 -c SHA256SUMS
 ```
 
 ## 2. Teach your agent the format
 
-Your agent learns the review file format from `CHANGE_REVIEW.md`. Copy it into
-the repo where you work and tell the agent to follow it after every change.
+Your agent learns the review file format from `TASK_REVIEW.md`. Copy it into
+the repo where you work and tell the agent to follow it when it finishes a task.
 
 ```bash
-cp CHANGE_REVIEW.md ~/code/my-app/
+cp TASK_REVIEW.md ~/code/my-app/
 ```
 
 Then add one line to that repo's `AGENTS.md` (Codex, most agents) or
 `CLAUDE.md` (Claude Code):
 
 ```markdown
-After any code change, follow CHANGE_REVIEW.md.
+When you finish a task, follow TASK_REVIEW.md.
 ```
 
-In Claude Code you can also import it directly with a line `@CHANGE_REVIEW.md`
+In Claude Code you can also import it directly with a line `@TASK_REVIEW.md`
 in `CLAUDE.md`.
 
 You don't strictly need the file: the binary prints the same text, so you can
-just ask "run `change-view instructions` and write a review file for this
-change". The copy in this folder always matches this binary. After you update
-`change-view`, refresh it with `change-view instructions > CHANGE_REVIEW.md`.
+just ask "run `task-view instructions` and write a review file for this
+task". The copy in this folder always matches this binary. After you update
+`task-view`, refresh it with `task-view instructions > TASK_REVIEW.md`.
 
 ## 3. Daily workflow
 
-1. **Ask the agent for a change** as usual. It works across one or more local
-   repos (for example a client and its mock server).
-2. **The agent writes `.review/change.json`** in the repo where the task
-   started, then runs `change-view validate .review/change.json --format json`
-   and fixes the file until it validates. It adds `.review/` to
-   `.git/info/exclude`, so the file is never committed.
+1. **Give the agent a task** and let it work on its own. It works across one
+   or more local repos (for example a client and its mock server).
+2. **When it finishes, the agent writes `.review/change-<task>.json`** in the
+   repo where the task started, named after the task, then runs
+   `task-view validate .review/change-<task>.json --format json` and fixes
+   the file until it validates. It adds `.review/` to `.git/info/exclude`, so
+   the file is never committed. Each task gets its own file.
 3. **You open the review:**
 
    ```bash
-   change-view open .review/change.json
+   task-view open .review/change-<task>.json
    ```
 
-   The page is written to a temporary folder and opens in your default
-   browser. It is one self-contained file that works offline; keep it or share
-   it with `--out review.html`.
+   The page is written to `.review/generated/change-<task>.html` and opens in
+   your default browser. It is one self-contained file that works offline;
+   keep it, share it, or write it elsewhere with `--out review.html`.
 4. **Decide.** If something looks wrong, ask the agent to fix the code or the
-   account. It rewrites `change.json` and you run `open` again for a fresh page.
+   account. It rewrites the task's file and you run `open` again for a fresh
+   page.
 
 ### Reviewing work that is already committed
 
 You can ask an agent to describe any existing commit, not only work it just
 did:
 
-> Run `change-view instructions` and write `.review/change.json` for commit
+> Run `task-view instructions` and write `.review/change-<name>.json` for commit
 > `<sha>` (and the commits since `<start>` if several). Don't change any code.
 
 The agent lists those commits in the file. Unrelated uncommitted files in the
@@ -185,12 +189,12 @@ test result is always the agent's word.
 
 | Command | What it does |
 | --- | --- |
-| `change-view open <file> [--out <path>] [--no-browser]` | Check the file, write the HTML page and open it |
-| `change-view validate <file> [--format text\|json]` | Check the file and print errors and warnings (`json` is for agents) |
-| `change-view instructions` | Print the agent instructions (`CHANGE_REVIEW.md`) |
-| `change-view schema` | Print the JSON Schema of the review file |
-| `change-view languages` | Print the language names usable for syntax colouring |
-| `change-view version` | Print the binary and supported schema versions |
+| `task-view open <file> [--out <path>] [--no-browser]` | Check the file, write the HTML page and open it |
+| `task-view validate <file> [--format text\|json]` | Check the file and print errors and warnings (`json` is for agents) |
+| `task-view instructions` | Print the agent instructions (`TASK_REVIEW.md`) |
+| `task-view schema` | Print the JSON Schema of the review file |
+| `task-view languages` | Print the language names usable for syntax colouring |
+| `task-view version` | Print the binary and supported schema versions |
 
 `open` and `validate` read only the repos listed in the review file. Pass
 `--scan-siblings` to also look at the folders next to them and list Git repos
@@ -214,7 +218,7 @@ Exit codes for `validate` and `open`:
   wrote the file.
 - **The page shows old code after more edits:** the review describes an exact
   state. If you or the agent change files afterwards, ask the agent to
-  rewrite and re-validate `change.json`.
+  rewrite and re-validate the task's review file.
 - **A large graph is hard to read:** search for a node, click it to focus on
   its neighbours, hide unchanged nodes, or switch to Flows for one path at a
   time.

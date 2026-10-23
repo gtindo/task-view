@@ -4,7 +4,7 @@ import (
 	"os"
 	"slices"
 
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // lineOwners maps a final path to, per line, the state (commit or

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gtindo/changes-view/internal/gitx"
-	"github.com/gtindo/changes-view/internal/langs"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/gitx"
+	"github.com/gtindo/task-view/internal/langs"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // State names used when reading files.

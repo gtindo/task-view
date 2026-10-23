@@ -8,10 +8,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/gtindo/changes-view/internal/engine"
-	"github.com/gtindo/changes-view/internal/gitx"
-	"github.com/gtindo/changes-view/internal/langs"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/engine"
+	"github.com/gtindo/task-view/internal/gitx"
+	"github.com/gtindo/task-view/internal/langs"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // Row is one line of a code excerpt or hunk as the page draws it. The JSON

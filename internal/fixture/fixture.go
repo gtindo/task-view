@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // Set is a built fixture: three repos side by side plus an unrelated dirty

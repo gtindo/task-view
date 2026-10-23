@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gtindo/changes-view/internal/fixture"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/fixture"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
@@ -33,7 +33,7 @@ func writeReviewFile(t *testing.T, set *fixture.Set, data []byte) string {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(dir, "change.json")
+	path := filepath.Join(dir, "change-fixture.json")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +402,21 @@ func TestOpenWritesPage(t *testing.T) {
 	loadsExternalScript := bytes.Contains(html, []byte("https://")) && bytes.Contains(html, []byte("<script src="))
 	if loadsExternalScript {
 		t.Errorf("page loads an external script")
+	}
+}
+
+func TestOpenDefaultsToGeneratedFolder(t *testing.T) {
+	set := fixture.Build(t)
+	path := writeReviewFile(t, set, marshalReview(t, set.Review()))
+
+	var out bytes.Buffer
+	if exit := run([]string{"open", path, "--no-browser"}, &out, &out); exit != review.ExitOK {
+		t.Fatalf("exit %d\n%s", exit, out.String())
+	}
+
+	page := filepath.Join(filepath.Dir(path), "generated", "change-fixture.html")
+	if _, err := os.Stat(page); err != nil {
+		t.Fatalf("no page at %s: %v\n%s", page, err, out.String())
 	}
 }
 

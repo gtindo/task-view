@@ -1,5 +1,5 @@
-// Command change-view turns a coding agent's account of a change into review
-// views, after checking that the account matches the repos exactly.
+// Command task-view turns a coding agent's account of a finished task into
+// review views, after checking that the account matches the repos exactly.
 package main
 
 import (
@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gtindo/changes-view/internal/engine"
-	"github.com/gtindo/changes-view/internal/instructions"
-	"github.com/gtindo/changes-view/internal/langs"
-	"github.com/gtindo/changes-view/internal/render"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/engine"
+	"github.com/gtindo/task-view/internal/instructions"
+	"github.com/gtindo/task-view/internal/langs"
+	"github.com/gtindo/task-view/internal/render"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 // version is set at release time with -ldflags.
@@ -30,15 +30,19 @@ var version = "0.1.0-dev"
 // review file.
 const exitUsage = 2
 
-const usage = `change-view — review views for a coding agent's change
+// generatedDir is the folder, next to the review file, where open writes the
+// page when --out is not given.
+const generatedDir = "generated"
+
+const usage = `task-view — review views for the change a coding agent made on a task
 
 Usage:
-  change-view validate <file> [--format text|json] [--scan-siblings]
-  change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]
-  change-view schema
-  change-view languages
-  change-view instructions
-  change-view version
+  task-view validate <file> [--format text|json] [--scan-siblings]
+  task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]
+  task-view schema
+  task-view languages
+  task-view instructions
+  task-view version
 
 Exit codes (validate, open):
   0  schema valid, no contradicted or unresolved references
@@ -48,8 +52,8 @@ Exit codes (validate, open):
 `
 
 const (
-	validateUsage = "usage: change-view validate <file> [--format text|json] [--scan-siblings]\n"
-	openUsage     = "usage: change-view open <file> [--out <path>] [--no-browser] [--scan-siblings]\n"
+	validateUsage = "usage: task-view validate <file> [--format text|json] [--scan-siblings]\n"
+	openUsage     = "usage: task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]\n"
 
 	scanSiblingsHelp = "also warn about dirty Git repos next to the listed repos"
 	// --no-sibling-scan predates the opt-in --scan-siblings; it is still
@@ -87,7 +91,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		return review.ExitOK
 	case "version", "--version", "-v":
-		emit(stdout, "change-view %s\nschema versions: %s\n", version, joinInts(review.SupportedVersions))
+		emit(stdout, "task-view %s\nschema versions: %s\n", version, joinInts(review.SupportedVersions))
 
 		return review.ExitOK
 	case "help", "--help", "-h":
@@ -276,7 +280,7 @@ func fileLocation(file string, lines []int) string {
 func cmdOpen(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("open", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	outPath := flags.String("out", "", "where to write the HTML file (default: a temp folder)")
+	outPath := flags.String("out", "", "where to write the HTML file (default: generated/<name>.html next to the review file)")
 	noBrowser := flags.Bool("no-browser", false, "write the page without opening it")
 	scanSiblings := flags.Bool("scan-siblings", false, scanSiblingsHelp)
 	flags.Bool("no-sibling-scan", false, noSiblingScanHelp)
@@ -306,16 +310,18 @@ func cmdOpen(args []string, stdout, stderr io.Writer) int {
 		return review.ExitEnv
 	}
 
+	// Several review files can share .review/, one per task, so the default
+	// page is named after its review file and kept apart in generated/.
 	target := *outPath
 	if target == "" {
-		dir, err := os.MkdirTemp("", "change-view-")
-		if err != nil {
-			emit(stderr, "cannot create temp folder: %v\n", err)
+		reviewName := strings.TrimSuffix(filepath.Base(reviewPath), filepath.Ext(reviewPath))
+		target = filepath.Join(filepath.Dir(reviewPath), generatedDir, reviewName+".html")
+	}
 
-			return review.ExitEnv
-		}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		emit(stderr, "cannot create %s: %v\n", filepath.Dir(target), err)
 
-		target = filepath.Join(dir, "review.html")
+		return review.ExitEnv
 	}
 
 	if err := os.WriteFile(target, page, 0o644); err != nil {

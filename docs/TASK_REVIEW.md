@@ -1,19 +1,24 @@
-# Change review file
+# Task review file
 
-After you finish a change, write a review file so a human can review it with
-`change-view`. The file describes what you changed and why, as a small graph.
+When you finish a task, write a review file so a human can review your work
+with `task-view`. The file describes what you changed and why, as a small
+graph.
 The tool checks every reference you give against the files and Git; anything
 without a reference is shown as "agent says". Be precise, not persuasive.
 
 ## When
 
-- Once the change is complete, never during the work.
-- Rewrite the whole file after any further change; do not patch it.
+- Once the task is complete, never during the work or after each edit.
+- If you change more for the same task, rewrite its whole file; do not patch
+  it.
 
 ## Where
 
-`.review/change.json` in the repo where the task started, unless told otherwise.
-Add `.review/` to `.git/info/exclude` if it is not ignored already.
+`.review/change-<task>.json` in the repo where the task started, unless told
+otherwise. `<task>` is a short kebab-case name for the task, for example
+`change-rate-limit-login.json`: one file per task, so earlier reviews stay
+next to it. Add `.review/` to `.git/info/exclude` if it is not ignored
+already.
 
 ## Steps
 
@@ -21,7 +26,7 @@ Add `.review/` to `.git/info/exclude` if it is not ignored already.
    instructions (CLAUDE.md, AGENTS.md, CONTRIBUTING) or the user tell you
    to; otherwise leave changes uncommitted. The review covers them through
    the `WORKTREE` entry (step 3).
-2. Run `change-view schema` if you need the exact JSON Schema.
+2. Run `task-view schema` if you need the exact JSON Schema.
 3. List every repo in `repos`, with `path` relative to this file's repo:
    - repos you changed: `commits` = full SHAs of the change, ordered from
      last to first: `git rev-list --first-parent <start>..HEAD`, where
@@ -40,11 +45,12 @@ Add `.review/` to `.git/info/exclude` if it is not ignored already.
    Every hunk must fall inside a node's `range` or `file` ref.
    Line numbers in refs are read at `commits[0]` (on disk for `WORKTREE`).
 5. Write nodes, edges, flows, claims and notes (rules below).
-6. Run `change-view validate .review/change.json --format json`.
+6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
    `unmentioned_hunk` warning. Repeat until exit code 0 and no
    `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
-8. Tell the user: `change-view open .review/change.json`.
+8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
+   page to `.review/generated/change-<task>.html`.
 
 ## Nodes
 
@@ -72,7 +78,7 @@ Endpoints, queues and external services get a node without `ref`.
 Set `languages` on each repo you reference, context repos included: glob to language name,
 first match wins, e.g. `{ "**/*.tsx": "tsx", "**/*.ts": "typescript" }`.
 Cover every file you reference. For a file the globs can't describe, add
-`"language"` on its ref. Valid names: `change-view languages`.
+`"language"` on its ref. Valid names: `task-view languages`.
 
 ## Edges
 

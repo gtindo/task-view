@@ -7,9 +7,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gtindo/changes-view/internal/fixture"
-	"github.com/gtindo/changes-view/internal/langs"
-	"github.com/gtindo/changes-view/internal/review"
+	"github.com/gtindo/task-view/internal/fixture"
+	"github.com/gtindo/task-view/internal/langs"
+	"github.com/gtindo/task-view/internal/review"
 )
 
 func TestParseDiff(t *testing.T) {
@@ -120,7 +120,7 @@ func TestWorktreeChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(set.Web, ".review", "change.json")
+	path := filepath.Join(set.Web, ".review", "change-fixture.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
