@@ -70,6 +70,7 @@ var Catalog = map[string]CodeInfo{
 	"git_not_found":  {LevelError, ExitEnv, "", "git not found"},
 	"repo_not_found": {LevelError, ExitEnv, "", "Repo not found"},
 	"not_repo_root":  {LevelError, ExitEnv, "", "Not a repo root"},
+	"bad_base":       {LevelError, ExitEnv, "", "Bad base or tip"},
 
 	"commit_not_found":    {LevelError, ExitReferences, StatusUnresolved, "Commit not found"},
 	"commit_chain_broken": {LevelError, ExitReferences, "", "Commit chain broken"},
@@ -92,6 +93,7 @@ var Catalog = map[string]CodeInfo{
 	"worktree_changed":       {LevelWarning, ExitOK, "", "Worktree changed"},
 	"no_language":            {LevelWarning, ExitOK, "", "No language"},
 	"missing_why":            {LevelWarning, ExitOK, "", "Missing why"},
+	"empty_change":           {LevelWarning, ExitOK, "", "Empty change"},
 }
 
 // NewFinding builds a finding with the level taken from the catalog.

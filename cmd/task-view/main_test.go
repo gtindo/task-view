@@ -96,8 +96,15 @@ func TestValidReviewGolden(t *testing.T) {
 		t.Fatalf("unexpected unmentioned hunks:\n%s", res.raw)
 	}
 
-	got := strings.ReplaceAll(res.raw, set.Root, "$ROOT")
-	golden := filepath.Join("testdata", "valid.golden.json")
+	compareGolden(t, "valid.golden.json", strings.ReplaceAll(res.raw, set.Root, "$ROOT"))
+}
+
+// compareGolden checks got against testdata/<name>, rewriting it first
+// with -update.
+func compareGolden(t *testing.T, name, got string) {
+	t.Helper()
+
+	golden := filepath.Join("testdata", name)
 	if *update {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
@@ -477,7 +484,7 @@ func TestOpenRefusesSchemaErrors(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
-	for _, command := range []string{"schema", "languages", "instructions", "version"} {
+	for _, command := range []string{"schema", "languages", "instructions", "version", "help"} {
 		var out bytes.Buffer
 		if exit := run([]string{command}, &out, &out); exit != review.ExitOK || out.Len() == 0 {
 			t.Errorf("%s: exit %d, %d bytes", command, exit, out.Len())

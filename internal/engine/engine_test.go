@@ -145,3 +145,88 @@ func TestWorktreeChanged(t *testing.T) {
 		t.Fatalf("no worktree_changed finding: %+v", run.Findings)
 	}
 }
+
+func TestRepoIDs(t *testing.T) {
+	got := repoIDs([]string{"/a/web", "/b/web", "/c/My_App.v2", "/d/---", "/e/web-2"})
+	want := []string{"web", "web-2", "my-app-v2", "repo", "web-2-2"}
+	if !slices.Equal(got, want) {
+		t.Errorf("repoIDs = %v, want %v", got, want)
+	}
+}
+
+func TestLanguageGlobs(t *testing.T) {
+	languageOf := func(file string) string {
+		switch {
+		case filepath.Base(file) == "CMakeLists.txt":
+			return "cmake"
+		case filepath.Base(file) == "Makefile":
+			return "makefile"
+		case filepath.Ext(file) == ".txt":
+			return "plaintext"
+		case filepath.Ext(file) == ".go":
+			return "go"
+		}
+
+		return ""
+	}
+
+	got, err := json.Marshal(languageGlobs([]string{"a/main.go", "b.go", "CMakeLists.txt", "notes.txt", "build/Makefile", "unknown.xyz"}, languageOf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"**/CMakeLists.txt":"cmake","**/Makefile":"makefile","**/*.go":"go","**/*.txt":"plaintext"}`
+	if string(got) != want {
+		t.Errorf("languageGlobs = %s, want %s", got, want)
+	}
+}
+
+func TestContextWindow(t *testing.T) {
+	lines := []string{"1", "2", "3", "4", "5"}
+	cases := []struct {
+		first, last, size int
+		wantStart         int
+		wantLines         []string
+	}{
+		{3, 3, 1, 2, []string{"2", "3", "4"}},
+		{1, 2, 3, 1, []string{"1", "2", "3", "4", "5"}},
+		// A pure deletion after line 2: the empty span 3-2.
+		{3, 2, 1, 2, []string{"2", "3"}},
+	}
+	for _, testCase := range cases {
+		got := contextWindow(lines, testCase.first, testCase.last, testCase.size)
+		if got == nil || got.Start != testCase.wantStart || !slices.Equal(got.Lines, testCase.wantLines) {
+			t.Errorf("contextWindow(%d, %d, %d) = %+v", testCase.first, testCase.last, testCase.size, got)
+		}
+	}
+
+	if got := contextWindow(nil, 1, 0, 3); got != nil {
+		t.Errorf("empty file gave %+v", got)
+	}
+}
+
+func TestHunkEvidenceLines(t *testing.T) {
+	limits := excerptLimits{contextLines: 0, maxHunkLines: 10}
+	finalLines := []string{"x", "y", "z"}
+
+	topDeletion := &Hunk{OldStart: 1, OldCount: 2, NewStart: 0, Old: []string{"a", "b"}}
+	got := newHunkEvidence(DiffModified, topDeletion, finalLines, limits)
+	if !slices.Equal(got.Lines, []int{1, 1}) || got.Context != nil {
+		t.Errorf("deletion at the top: lines %v, context %+v", got.Lines, got.Context)
+	}
+
+	if emptied := newHunkEvidence(DiffModified, topDeletion, nil, limits); emptied.Lines != nil {
+		t.Errorf("emptied file has lines %v; its file ref covers it", emptied.Lines)
+	}
+
+	deleted := newHunkEvidence(DiffDeleted, topDeletion, nil, limits)
+	if deleted.Lines != nil || !slices.Equal(deleted.OldLines, []int{1, 2}) {
+		t.Errorf("deleted file: lines %v, old lines %v", deleted.Lines, deleted.OldLines)
+	}
+
+	replaced := &Hunk{OldStart: 2, OldCount: 1, NewStart: 2, NewCount: 1, Old: []string{"b"}, New: []string{"y"}}
+	withContext := newHunkEvidence(DiffModified, replaced, finalLines, excerptLimits{contextLines: 1, maxHunkLines: 10})
+	if withContext.Context == nil || withContext.Context.Start != 1 || len(withContext.Context.Lines) != 3 {
+		t.Errorf("context asked for: %+v", withContext.Context)
+	}
+}

@@ -29,4 +29,5 @@ give against Git so the map matches the real diff.
    ```
 
 When asked to describe an existing commit, do the same for that commit
-without changing any code.
+without changing any code: `task-view gather --base <sha>^ --tip <sha>`
+gives its evidence.

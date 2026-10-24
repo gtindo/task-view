@@ -147,10 +147,7 @@ func Run(path string, options Options) *Engine {
 		return run.finish()
 	}
 
-	run.Base = filepath.Dir(run.ReviewPath)
-	if gitRoot, err := gitx.Toplevel(run.Base); err == nil {
-		run.Base = gitRoot
-	}
+	run.Base = baseDir(run.ReviewPath)
 
 	if envFindings := run.resolveRepos(); len(envFindings) > 0 {
 		run.Findings = append(run.Findings, envFindings...)

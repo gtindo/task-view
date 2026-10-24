@@ -28,7 +28,7 @@ behaviour. `README.md` describes layout and commands.
 | `make vet` | `go vet` and the `gofmt` check |
 | `make lint` | golangci-lint (`.golangci.yml`) and ESLint on `app.js` (`eslint.config.mjs`, run through `npx`) |
 | `make check` | `vet`, `lint` and `test` |
-| `make golden` | Rewrites `cmd/task-view/testdata/valid.golden.json` after an intended output change |
+| `make golden` | Rewrites `cmd/task-view/testdata/valid.golden.json` and `gather.golden.json` after an intended output change |
 | `make docs` | Regenerates `docs/TASK_REVIEW.md` from `internal/instructions` |
 | `make demo` | Live demo pages in `site/` from the reviews in `demo/`; a push to `main` runs it in CI and publishes GitHub Pages |
 | `make release` | Cross-compiled binaries, guides from `docs/`, the agent skill and checksums in `release/`; a pushed `v*` tag runs it in CI and publishes a GitHub release |

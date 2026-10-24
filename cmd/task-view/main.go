@@ -39,12 +39,14 @@ const usage = `task-view — review views for the change a coding agent made on 
 Usage:
   task-view validate <file> [--format text|json] [--scan-siblings]
   task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]
+  task-view gather [<path>[=<base>]...] [--base <rev>] [--tip <rev>] [--context <path>]...
+                   [--review <file>] [--lines <n>] [--max-hunk-lines <n>] [--format text|json]
   task-view schema
   task-view languages
   task-view instructions
   task-view version
 
-Exit codes (validate, open):
+Exit codes (validate, open; gather uses 0, 2 and 3):
   0  schema valid, no contradicted or unresolved references
   1  at least one contradicted or unresolved reference
   2  schema invalid or file unreadable
@@ -78,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdValidate(rest, stdout, stderr)
 	case "open":
 		return cmdOpen(rest, stdout, stderr)
+	case "gather":
+		return cmdGather(rest, stdout, stderr)
 	case "schema":
 		emit(stdout, "%s", review.SchemaJSON)
 
@@ -194,12 +198,18 @@ func writeJSON(out io.Writer, result *engine.Engine) {
 		Summary:       result.Summary,
 	}
 
+	encodeJSON(out, "  ", output)
+}
+
+// encodeJSON writes value as JSON for agents, each level indented by
+// indent; an empty indent prints it on one line.
+func encodeJSON(out io.Writer, indent string, value any) {
 	encoder := json.NewEncoder(out)
-	encoder.SetIndent("", "  ")
+	encoder.SetIndent("", indent)
 	// Agents read hints and messages verbatim; keep <, > and & unescaped.
 	encoder.SetEscapeHTML(false)
 	// Like emit: a failed write to stdout has nowhere left to be reported.
-	_ = encoder.Encode(output)
+	_ = encoder.Encode(value)
 }
 
 // textReport renders the human-readable validation report for the review
@@ -221,24 +231,27 @@ func textReport(reviewPath string, result *engine.Engine) string {
 	fmt.Fprintf(&report, "  verified %d · contradicted %d · unresolved %d · agent statements %d\n",
 		summary.Verified, summary.Contradicted, summary.Unresolved, summary.AgentStatements)
 
-	section := func(title string, findings []review.Finding) {
-		if len(findings) == 0 {
-			return
-		}
-
-		fmt.Fprintf(&report, "\n%s\n", title)
-		for _, finding := range findings {
-			fmt.Fprintf(&report, "  %-22s %s\n", finding.Code, findingLocation(finding))
-			fmt.Fprintf(&report, "    %s\n", finding.Message)
-			if finding.Hint != "" {
-				fmt.Fprintf(&report, "    hint: %s\n", finding.Hint)
-			}
-		}
-	}
-	section("errors", errs)
-	section("warnings", warnings)
+	writeFindings(&report, "errors", errs)
+	writeFindings(&report, "warnings", warnings)
 
 	return report.String()
+}
+
+// writeFindings appends a titled list of findings with their locations and
+// hints, or nothing when there are none.
+func writeFindings(report *strings.Builder, title string, findings []review.Finding) {
+	if len(findings) == 0 {
+		return
+	}
+
+	fmt.Fprintf(report, "\n%s\n", title)
+	for _, finding := range findings {
+		fmt.Fprintf(report, "  %-22s %s\n", finding.Code, findingLocation(finding))
+		fmt.Fprintf(report, "    %s\n", finding.Message)
+		if finding.Hint != "" {
+			fmt.Fprintf(report, "    hint: %s\n", finding.Hint)
+		}
+	}
 }
 
 // findingLocation says where a finding points: its path in the review file,

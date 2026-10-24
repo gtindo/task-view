@@ -33,14 +33,14 @@ The visualizer is a local review aid for a human reading an agent's change, acro
 - No automated review, scoring or approval. The visualizer never says a change is good.
 - No running of tests, builds or commands other than read-only Git, and no reading of test reports to infer results.
 - No language parsing, symbol resolution or call-graph discovery. If the agent didn't describe it, it isn't drawn; it only shows up as unmentioned diff.
-- No agent-facing tools. Agents don't need the visualizer to review their own work; it exists for the human.
+- No agent-facing review. `gather` and `validate` help the agent write an accurate account; no command reviews or judges the agent's work, which is the reviewer's job through the views.
 
 ## Local workflow
 
 The whole loop runs on the developer's machine in five steps, with no state kept between reviews except the input file.
 
 1. **Agent makes the change** in one or more local repos, including tests, and runs whatever it normally runs.
-2. **Agent writes the input** `.review/change-<task>.json` in the main repo (or a path you choose), following the agent context file. `<task>` names the task, so several reviews can sit side by side in `.review/`. For each repo it records the commits of the change, newest first, so every reference points at an exact state.
+2. **Agent gathers the evidence and writes the input.** `task-view gather` prints the repos block (commits, languages) and every changed file with its hunks in final-state line numbers, so the agent spends its effort on structuring the change, not on collecting it. The agent writes `.review/change-<task>.json` in the main repo (or a path you choose), following the agent context file. `<task>` names the task, so several reviews can sit side by side in `.review/`. For each repo it records the commits of the change, newest first, so every reference points at an exact state.
 3. **Agent validates** with `task-view validate .review/change-<task>.json --format json`, fixes every error, and repeats until the exit code is 0 and no unmentioned\_hunk warning remains (or each remaining one is explained in notes).
 4. **Developer runs** `task-view open .review/change-<task>.json`. The binary resolves and verifies every reference using only the filesystem and Git, in seconds.
 5. **Browser opens** a single static HTML page. The developer reviews, and can ask the agent to revise the change or the account. The agent rewrites the same file for a revision and `open` regenerates the page; reviews of earlier tasks stay in their own files.
@@ -57,6 +57,7 @@ The visualizer ships as one static Go binary, `task-view`, with no runtime depen
 | --- | --- | --- |
 | `task-view validate <file> [--format text\|json] [--scan-siblings]` | Schema validation, then chain, reference and diff-level checks. No browser. Exit codes below | Agent, after writing the review file |
 | `task-view open <file> [--out <path>] [--no-browser] [--scan-siblings]` | Runs the same checks, then writes one self-contained HTML file (default: `generated/<name>.html` next to the review file, so `.review/generated/change-<task>.html`) and opens it in the default browser. Exit 2 or 3: no page, prints the errors. Exit 1: page is generated with a red banner listing the errors, so a reviewer still sees the account | Developer |
+| `task-view gather [<path>[=<base>]...] [--base <rev>] [--tip <rev>] [--context <path>]... [--review <file>] [--lines <n>] [--max-hunk-lines <n>] [--format text\|json]` | Prints the evidence a review file is checked against: the `repos` block ready to paste, and every changed file with its hunks, refs and context. Read-only, writes nothing. Exit 0, 2 (bad invocation) or 3 (environment, `bad_base`) | Agent, before writing the review file |
 | `task-view schema` | Prints the JSON Schema of the review file | Agent, editors |
 | `task-view languages` | Prints valid language names, one per line, with their usual file extensions | Agent |
 | `task-view instructions` | Prints the agent context file matching this binary's schema version | Developer, to install or refresh the context file |
@@ -102,6 +103,37 @@ A bad invocation (no command, unknown command or format, wrong arguments) exits 
 
 Every error and warning carries a stable `code` from the code catalog, a JSON Pointer `path` into the review file when it concerns one element, and a `hint` written for an agent to act on. Diff-level findings (unmentioned hunks, unlisted repos, unreferenced test code) are warnings: the agent should fix them, but they never change the exit code, and `open` shows whatever remains so the reviewer sees what the account left out.
 
+### Gather output
+
+`gather` reads the repos exactly as `validate` will: the same commit chain, `WORKTREE` rule, diff, untracked files, `.review/` exclusion and line attribution. So the agent copies facts instead of collecting them, and an account built from them starts out matching the diff.
+
+- **Repos.** Positional paths are changed repos (default `.`); a folder inside a repo names that repo. `<path>=<base>` sets that repo's start, and `--base` sets it for every repo without one. `--context <path>` adds a repo the agent only read, at its HEAD. Ids come from folder names (`web`, then `web-2` on a repeat). Paths are relative to the Git root of the review file (`--review`, default `.review/change.json` under the current Git root).
+- **Commits.** With a base, the first-parent commits from the base to the tip (`--tip`, default HEAD), newest first; the base must be on the tip's first-parent line, else `bad_base`, with the meeting point as hint. `WORKTREE` leads when the tip is HEAD (not given) and there is uncommitted work outside `.review/`. No base means only the uncommitted work. A repo with nothing in range gets `empty_change` and is left out. With `--tip`, uncommitted work and later commits are reported as `uncommitted_changes` and `head_ahead`. To describe one existing commit: `--base <sha>^ --tip <sha>`.
+- **Languages.** For each changed text file, the highlighter's language for its name: one `**/*.<ext>` glob when the extension alone picks that language, else a `**/<name>` glob, with name globs first.
+
+```json
+{
+  "exitCode": 0,
+  "schemaVersion": 1,
+  "repos": [ { "id": "web", "path": ".", "commits": ["WORKTREE", "e3b8d1f0…"],
+               "languages": { "**/*.ts": "typescript" } } ],
+  "commits": { "web": [ { "sha": "e3b8d1f0…", "short": "e3b8d1f", "subject": "…", "author": "…", "date": "…" } ] },
+  "files": [
+    { "repo": "web", "file": "src/a.ts", "status": "modified", "change": "modified",
+      "language": "typescript", "added": 2, "removed": 1,
+      "ref": { "type": "file", "repo": "web", "file": "src/a.ts" },
+      "hunks": [
+        { "lines": [50, 51], "oldLines": [50, 50], "commits": ["WORKTREE"],
+          "added": ["…", "…"], "removed": ["…"] }
+      ] }
+  ],
+  "errors": [],
+  "warnings": []
+}
+```
+
+The JSON is printed on one line (shown indented here): it is long and read by agents only. Each file carries a `file` ref, and each hunk's `lines` is the smallest final-state range that covers it the way the coverage check reads refs: the added lines, or the line before the removal for a pure deletion. A hunk in a deleted file, or in a file left empty, has no `lines` and is covered by the file's ref; a binary change or a pure rename has no hunks. `status` is Git's (`added`, `modified`, `deleted`, `renamed`, with `oldFile`) and `change` the node change state it implies. `commits` lists the states that wrote a hunk's added lines. With `--lines <n>` (default 0, none) a hunk also carries `context`, `{start, lines}`: the final-state window around it, `n` lines on each side, left out in added files. `added` and `removed` keep at most `--max-hunk-lines` lines (default 200; 0 keeps all); a cut hunk is `truncated` and has no context. `--format text` prints the same as a status line, the `repos` block and a diff-like list.
+
 ### Implementation notes
 
 - **Git access:** shell out to the `git` binary with fixed read-only subcommands: `rev-parse` (`--show-toplevel`, `--verify`), `cat-file -e`, `rev-list --first-parent`, `show <sha>:<path>`, `diff --unified=0 -M --no-color --no-ext-diff`, `status --porcelain=v1 -z`, `ls-files --others --exclude-standard -z`, `log --no-walk=unsorted --format`. Only the `gitx` package runs them. Using the user's Git guarantees identical results to what they see, including their config for renames and attributes. Run with `GIT_OPTIONAL_LOCKS=0` so nothing is written to the repos, `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`. The working tree is read from disk only when a repo's final state is `WORKTREE`.
@@ -110,7 +142,7 @@ Every error and warning carries a stable `code` from the code catalog, a JSON Po
 - **HTML:** a page template plus Cytoscape.js with the ELK layout extension, embedded with `go:embed` and inlined into the output file; resolved data (excerpts, hunks, statuses) is injected as one JSON blob. No network access at view time.
 - **Context file:** embedded too, so `instructions` always matches the binary's schema version. `make docs` writes a copy to `docs/TASK_REVIEW.md`.
 - **Distribution:** `make release` cross-compiles static binaries (`CGO_ENABLED=0`) for Linux amd64/arm64, Windows amd64 and macOS amd64/arm64, with `SHA256SUMS`, the guides, the agent skill and the licenses. A GitHub Actions workflow runs it on a pushed `v*` tag and publishes a GitHub release (a tag with a suffix such as `-rc.1` is a pre-release). Install with `scripts/install.sh` or `scripts/install.ps1` (latest release, checksum check, per-user folder, no admin rights), a manual download, or `go install`.
-- **Tests:** fixture repos built by Go test helpers (`internal/fixture`) with pinned dates and config so SHAs are stable: three repos side by side (commits, a worktree change, an untracked file, a rename, a deleted file, a binary file) plus an unrelated dirty sibling. One golden output for an accurate review (`make golden` refreshes it), and a table-driven test that breaks one thing per code in the catalog and checks the code and exit code.
+- **Tests:** fixture repos built by Go test helpers (`internal/fixture`) with pinned dates and config so SHAs are stable: three repos side by side (commits, a worktree change, an untracked file, a rename, a deleted file, a binary file) plus an unrelated dirty sibling. One golden output for an accurate review and one for `gather` on the fixture (`make golden` refreshes both), a test that a review made of every ref `gather` proposes validates with no unmentioned hunk, and a table-driven test that breaks one thing per code in the catalog and checks the code and exit code.
 
 ## Input format
 
@@ -278,7 +310,7 @@ Test results, build success, type correctness, runtime behavior, and whether a `
 
 ### Code catalog
 
-The complete list of codes `validate` can return in schema version 1; adding a code is a minor version change, renaming one is a breaking change.
+The complete list of codes `validate` and `gather` can return in schema version 1 (`bad_base` and `empty_change` come only from `gather`); adding a code is a minor version change, renaming one is a breaking change.
 
 | Code | Level | Raised when |
 | --- | --- | --- |
@@ -293,7 +325,8 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 | `unknown_language` | Error, exit 2 | Language name not known to the highlighter |
 | `git_not_found` | Error, exit 3 | No `git` executable on PATH |
 | `repo_not_found` | Error, exit 3 | `repos[].path` does not exist |
-| `not_repo_root` | Error, exit 3 | Path is not the root of a Git repo |
+| `not_repo_root` | Error, exit 3 | Path is not the root of a Git repo (for `gather`: not inside one) |
+| `bad_base` | Error, exit 3 | `gather`: base or tip is not a commit, or the base is not on the tip's first-parent line |
 | `commit_not_found` | Error, exit 1 | A listed SHA does not exist |
 | `commit_chain_broken` | Error, exit 1 | Commits not contiguous first-parent order, or `WORKTREE` misplaced or not on HEAD |
 | `context_commits` | Error, exit 1 | `context` repo does not list exactly one SHA |
@@ -314,6 +347,7 @@ The complete list of codes `validate` can return in schema version 1; adding a c
 | `worktree_changed` | Warning | A referenced file changed during the run |
 | `no_language` | Warning | Referenced file matches no language |
 | `missing_why` | Warning | Changed node without `why` |
+| `empty_change` | Warning | `gather`: a changed repo has no commits in range and no uncommitted work |
 
 ## Views
 
@@ -392,24 +426,30 @@ already.
    instructions (CLAUDE.md, AGENTS.md, CONTRIBUTING) or the user tell you
    to; otherwise leave changes uncommitted. The review covers them through
    the `WORKTREE` entry (step 3).
-2. Run `task-view schema` if you need the exact JSON Schema.
-3. List every repo in `repos`, with `path` relative to this file's repo:
-   - repos you changed: `commits` = full SHAs of the change, ordered from
-     last to first: `git rev-list --first-parent <start>..HEAD`, where
-     <start> is the commit you started from. `commits[0]` must be the final
-     state you describe.
-   - if the repo has uncommitted changes that belong to the change
-     (`git status --porcelain` is not empty), put `"WORKTREE"` first.
-     Nothing committed at all: `"commits": ["WORKTREE"]`, and the change
-     starts where HEAD is.
-   - repos you only read: `"role": "context"` and `commits` = the one SHA
-     you read (`git rev-parse HEAD`).
-4. Get the real diff for each changed repo, from the initial state (parent
-   of the last listed commit, or HEAD for `["WORKTREE"]`):
-   `git diff <initial> <commits[0]> --unified=0`, or `git diff <initial>
-   --unified=0` plus untracked files when the list starts with `WORKTREE`.
-   Every hunk must fall inside a node's `range` or `file` ref.
-   Line numbers in refs are read at `commits[0]` (on disk for `WORKTREE`).
+2. The shape below is complete; `task-view schema` prints the JSON Schema
+   only if a validate error needs it.
+3. Gather the evidence from the repo where the review file goes:
+   `task-view gather --base <start> --format json`, where `<start>` is the
+   commit you started from. Leave out `--base` if you committed nothing.
+   - Several repos: name each with its own start,
+     `task-view gather .=<start> ../client=<start>`. Repos you only read:
+     add `--context ../api`.
+   - An existing commit: `task-view gather --base <sha>^ --tip <sha>`.
+   - Copy its `repos` into the review file as it is: paths, commits
+     (`WORKTREE` first when work is uncommitted) and languages are already
+     right. If you rename an id, use the new one in every ref.
+   - Fix every error with its `hint` and run it again. `uncommitted_changes`
+     or `head_ahead` means work the range leaves out; `empty_change` means a
+     repo has nothing to review.
+   - Never collect commits or the diff another way.
+4. Read `files`: every changed file with its hunks. Hunk `lines` are
+   final-state numbers, the ones refs use, and `commits` says which state
+   wrote them. Every hunk's `lines` must fall inside a node's `range` or
+   `file` ref: read the file at the final state and widen each range to the
+   whole piece it belongs to (function, component, block). A hunk without
+   `lines` (a deleted or emptied file) and a file without hunks (binary,
+   pure rename) need the file's `ref`. A `truncated` hunk was cut short.
+   Add `--lines 3` to see context around each hunk.
 5. Write nodes, edges, flows, claims and notes (rules below).
 6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
@@ -417,6 +457,17 @@ already.
    `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
 8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
    page to `.review/generated/change-<task>.html`.
+
+## File shape
+
+~~~json
+{ "version": 1, "summary": "<what was asked, what you did>",
+  "repos": [...], "nodes": [...], "edges": [...], "flows": [...],
+  "claims": [...], "notes": [...] }
+~~~
+
+`version`, `summary`, `repos` and `nodes` are required; the rest may be
+left out. Write no other top-level field.
 
 ## Nodes
 
@@ -441,10 +492,11 @@ Endpoints, queues and external services get a node without `ref`.
 
 ## Languages
 
-Set `languages` on each repo you reference, context repos included: glob to language name,
+`gather` sets `languages` for the changed files: glob to language name,
 first match wins, e.g. `{ "**/*.tsx": "tsx", "**/*.ts": "typescript" }`.
-Cover every file you reference. For a file the globs can't describe, add
-`"language"` on its ref. Valid names: `task-view languages`.
+Add globs for every other file you reference, context repos included. For
+a file the globs can't describe, add `"language"` on its ref. Valid names:
+`task-view languages`.
 
 ## Edges
 
@@ -465,13 +517,15 @@ that, so write no notes explaining it.
 ## Flows
 
 One flow per user-visible or caller-visible path your change affects:
-`path` lists node ids from the entry point through the changed code to the
-boundary; `tests` lists the test nodes that exercise it.
+`{ "id", "title", "path": [...], "tests": [...] }`. `title` says the path
+in a reader's words; `path` lists node ids from the entry point through the
+changed code to the boundary; `tests` lists the test nodes that exercise it.
 
 ## Claims and notes
 
-- `claims`: statements a reviewer might doubt, each with `evidence` refs
-  (usually `site` or `range`). Without evidence, put it in `notes` instead.
+- `claims`: statements a reviewer might doubt,
+  `{ "text", "about": [node ids], "evidence": [refs] }` (usually `site` or
+  `range` refs). Without evidence, put it in `notes` instead.
 - `notes`: doubts, shortcuts, things not done, assumptions. Plain sentences.
   Say what you didn't verify.
 
@@ -481,9 +535,9 @@ boundary; `tests` lists the test nodes that exercise it.
   or the code, and mention it in `notes` if the account was wrong.
 - Never claim tests passed unless you saw the output in this session.
 - Never leave changed lines out because they seem trivial.
-- Never list commits out of order or skip one; if you commit or edit files
-  again after writing the review file, update `commits` and every affected
-  line number, then validate again.
+- Never edit `commits` by hand. If you commit or edit files again after
+  writing the review file, run `gather` again, update `repos` and every
+  affected line number, then validate again.
 ```
 
 The file is embedded in the binary (`internal/instructions`), versioned with the schema, copied to `docs/TASK_REVIEW.md` by `make docs`, and is the only documentation the agent needs; the spec sections above are for the people building the tool.
@@ -494,7 +548,7 @@ Three steps, each usable on its own: step 1 lets agents produce accurate review 
 
 1. **Validator binary.** Go module, embedded JSON Schema, `schema`, `languages`, `instructions`, `version`, and `validate`: schema rules, chain checks including `WORKTREE`, all reference types (`file`, `range`, `site`, `hunk`, `commit`), diff-level checks, the full code catalog, JSON and text output, exit codes. Fixture repos and golden tests per code. `TASK_REVIEW.md` embedded. Exit: an agent produces a file that validates on a real multi-repo change with uncommitted work.
 2. **`open` with views.** Embedded template, Cytoscape.js with ELK, Chroma highlighting; top bar and side panel, graph with repo grouping, flow lanes, diff map, claims panel, inspector; error banner for exit 1. Exit: a reviewer can validate a real change from the page alone.
-3. **Extras.** Done: per-commit filtering in the diff map; a release pipeline (`make release` and a tag-triggered GitHub Actions workflow, instead of GoReleaser) with install scripts and a skill (no Homebrew tap). Not done: side-by-side comparison of two review files.
+3. **Extras.** Done: per-commit filtering in the diff map; a release pipeline (`make release` and a tag-triggered GitHub Actions workflow, instead of GoReleaser) with install scripts and a skill (no Homebrew tap); `gather`, so the agent copies the repos block and the hunks instead of collecting them. Not done: side-by-side comparison of two review files.
 
 ### Decisions
 

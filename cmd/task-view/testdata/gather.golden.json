@@ -1,0 +1,342 @@
+{
+  "exitCode": 0,
+  "schemaVersion": 1,
+  "repos": [
+    {
+      "id": "web",
+      "path": ".",
+      "commits": [
+        "WORKTREE",
+        "f4fa04779b7788769fed44ce6e4149fe8195701d"
+      ],
+      "languages": {
+        "**/*.ts": "typescript"
+      }
+    },
+    {
+      "id": "mock",
+      "path": "../mock",
+      "commits": [
+        "7b6c53bf2c147ca4ca65df7655271ba2ba8ed923"
+      ],
+      "languages": {
+        "**/*.ts": "typescript"
+      }
+    },
+    {
+      "id": "api",
+      "path": "../api",
+      "role": "context",
+      "commits": [
+        "4ffc837e91a8eeaf848a9cb2558090bb0c3d82a0"
+      ]
+    }
+  ],
+  "commits": {
+    "api": [
+      {
+        "sha": "4ffc837e91a8eeaf848a9cb2558090bb0c3d82a0",
+        "short": "4ffc837",
+        "subject": "api",
+        "author": "Fixture",
+        "date": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "mock": [
+      {
+        "sha": "7b6c53bf2c147ca4ca65df7655271ba2ba8ed923",
+        "short": "7b6c53b",
+        "subject": "mock change",
+        "author": "Fixture",
+        "date": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "web": [
+      {
+        "sha": "f4fa04779b7788769fed44ce6e4149fe8195701d",
+        "short": "f4fa047",
+        "subject": "web change",
+        "author": "Fixture",
+        "date": "2026-01-01T00:00:00Z"
+      }
+    ]
+  },
+  "files": [
+    {
+      "repo": "web",
+      "file": "img.png",
+      "status": "modified",
+      "change": "modified",
+      "binary": true,
+      "added": 0,
+      "removed": 0,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "img.png"
+      }
+    },
+    {
+      "repo": "web",
+      "file": "src/a.test.ts",
+      "status": "modified",
+      "change": "modified",
+      "language": "typescript",
+      "added": 2,
+      "removed": 2,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/a.test.ts"
+      },
+      "hunks": [
+        {
+          "lines": [
+            3,
+            3
+          ],
+          "oldLines": [
+            3,
+            3
+          ],
+          "commits": [
+            "f4fa04779b7788769fed44ce6e4149fe8195701d"
+          ],
+          "added": [
+            "  expect(a()).toBe(10);"
+          ],
+          "removed": [
+            "  expect(a()).toBe(1);"
+          ]
+        },
+        {
+          "lines": [
+            6,
+            6
+          ],
+          "oldLines": [
+            6,
+            6
+          ],
+          "commits": [
+            "f4fa04779b7788769fed44ce6e4149fe8195701d"
+          ],
+          "added": [
+            "  expect(1).toBe(2);"
+          ],
+          "removed": [
+            "  expect(1).toBe(1);"
+          ]
+        }
+      ]
+    },
+    {
+      "repo": "web",
+      "file": "src/a.ts",
+      "status": "modified",
+      "change": "modified",
+      "language": "typescript",
+      "added": 3,
+      "removed": 3,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/a.ts"
+      },
+      "hunks": [
+        {
+          "lines": [
+            2,
+            2
+          ],
+          "oldLines": [
+            2,
+            2
+          ],
+          "commits": [
+            "f4fa04779b7788769fed44ce6e4149fe8195701d"
+          ],
+          "added": [
+            "  return 10;"
+          ],
+          "removed": [
+            "  return 1;"
+          ]
+        },
+        {
+          "lines": [
+            6,
+            6
+          ],
+          "oldLines": [
+            6,
+            6
+          ],
+          "commits": [
+            "f4fa04779b7788769fed44ce6e4149fe8195701d"
+          ],
+          "added": [
+            "  return 20;"
+          ],
+          "removed": [
+            "  return 2;"
+          ]
+        },
+        {
+          "lines": [
+            9,
+            9
+          ],
+          "oldLines": [
+            9,
+            9
+          ],
+          "commits": [
+            "WORKTREE"
+          ],
+          "added": [
+            "export const c = 30;"
+          ],
+          "removed": [
+            "export const c = 3;"
+          ]
+        }
+      ]
+    },
+    {
+      "repo": "web",
+      "file": "src/new.ts",
+      "status": "added",
+      "change": "added",
+      "language": "typescript",
+      "added": 2,
+      "removed": 0,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/new.ts"
+      },
+      "hunks": [
+        {
+          "lines": [
+            1,
+            2
+          ],
+          "commits": [
+            "f4fa04779b7788769fed44ce6e4149fe8195701d"
+          ],
+          "added": [
+            "export const n = 1;",
+            "export const m = a();"
+          ]
+        }
+      ]
+    },
+    {
+      "repo": "web",
+      "file": "src/old.ts",
+      "status": "deleted",
+      "change": "deleted",
+      "language": "typescript",
+      "added": 0,
+      "removed": 1,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/old.ts"
+      },
+      "hunks": [
+        {
+          "oldLines": [
+            1,
+            1
+          ],
+          "removed": [
+            "export const old = 1;"
+          ]
+        }
+      ]
+    },
+    {
+      "repo": "web",
+      "file": "src/renamed.ts",
+      "oldFile": "src/ren.ts",
+      "status": "renamed",
+      "change": "modified",
+      "language": "typescript",
+      "added": 0,
+      "removed": 0,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/renamed.ts"
+      }
+    },
+    {
+      "repo": "web",
+      "file": "src/untracked.ts",
+      "status": "added",
+      "change": "added",
+      "untracked": true,
+      "language": "typescript",
+      "added": 1,
+      "removed": 0,
+      "ref": {
+        "type": "file",
+        "repo": "web",
+        "file": "src/untracked.ts"
+      },
+      "hunks": [
+        {
+          "lines": [
+            1,
+            1
+          ],
+          "commits": [
+            "WORKTREE"
+          ],
+          "added": [
+            "export const u = 1;"
+          ]
+        }
+      ]
+    },
+    {
+      "repo": "mock",
+      "file": "handlers.ts",
+      "status": "modified",
+      "change": "modified",
+      "language": "typescript",
+      "added": 1,
+      "removed": 1,
+      "ref": {
+        "type": "file",
+        "repo": "mock",
+        "file": "handlers.ts"
+      },
+      "hunks": [
+        {
+          "lines": [
+            1,
+            1
+          ],
+          "oldLines": [
+            1,
+            1
+          ],
+          "commits": [
+            "7b6c53bf2c147ca4ca65df7655271ba2ba8ed923"
+          ],
+          "added": [
+            "export const h = () => 2;"
+          ],
+          "removed": [
+            "export const h = () => 1;"
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

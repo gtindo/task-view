@@ -85,6 +85,18 @@ func Known(name string) bool {
 	return ok
 }
 
+// ForFile returns the language the highlighter would pick for a path from
+// its file name alone, or "" when no lexer claims it. It lets gather propose
+// language globs without the agent guessing names.
+func ForFile(path string) string {
+	lexer := lexers.Match(path)
+	if lexer == nil {
+		return ""
+	}
+
+	return strings.ToLower(lexer.Config().Name)
+}
+
 // Closest returns up to limit valid names nearest to name, for suggestions
 // after an unknown language. Ties in distance are broken by name.
 func Closest(name string, limit int) []string {

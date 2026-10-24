@@ -26,24 +26,30 @@ already.
    instructions (CLAUDE.md, AGENTS.md, CONTRIBUTING) or the user tell you
    to; otherwise leave changes uncommitted. The review covers them through
    the `WORKTREE` entry (step 3).
-2. Run `task-view schema` if you need the exact JSON Schema.
-3. List every repo in `repos`, with `path` relative to this file's repo:
-   - repos you changed: `commits` = full SHAs of the change, ordered from
-     last to first: `git rev-list --first-parent <start>..HEAD`, where
-     <start> is the commit you started from. `commits[0]` must be the final
-     state you describe.
-   - if the repo has uncommitted changes that belong to the change
-     (`git status --porcelain` is not empty), put `"WORKTREE"` first.
-     Nothing committed at all: `"commits": ["WORKTREE"]`, and the change
-     starts where HEAD is.
-   - repos you only read: `"role": "context"` and `commits` = the one SHA
-     you read (`git rev-parse HEAD`).
-4. Get the real diff for each changed repo, from the initial state (parent
-   of the last listed commit, or HEAD for `["WORKTREE"]`):
-   `git diff <initial> <commits[0]> --unified=0`, or `git diff <initial>
-   --unified=0` plus untracked files when the list starts with `WORKTREE`.
-   Every hunk must fall inside a node's `range` or `file` ref.
-   Line numbers in refs are read at `commits[0]` (on disk for `WORKTREE`).
+2. The shape below is complete; `task-view schema` prints the JSON Schema
+   only if a validate error needs it.
+3. Gather the evidence from the repo where the review file goes:
+   `task-view gather --base <start> --format json`, where `<start>` is the
+   commit you started from. Leave out `--base` if you committed nothing.
+   - Several repos: name each with its own start,
+     `task-view gather .=<start> ../client=<start>`. Repos you only read:
+     add `--context ../api`.
+   - An existing commit: `task-view gather --base <sha>^ --tip <sha>`.
+   - Copy its `repos` into the review file as it is: paths, commits
+     (`WORKTREE` first when work is uncommitted) and languages are already
+     right. If you rename an id, use the new one in every ref.
+   - Fix every error with its `hint` and run it again. `uncommitted_changes`
+     or `head_ahead` means work the range leaves out; `empty_change` means a
+     repo has nothing to review.
+   - Never collect commits or the diff another way.
+4. Read `files`: every changed file with its hunks. Hunk `lines` are
+   final-state numbers, the ones refs use, and `commits` says which state
+   wrote them. Every hunk's `lines` must fall inside a node's `range` or
+   `file` ref: read the file at the final state and widen each range to the
+   whole piece it belongs to (function, component, block). A hunk without
+   `lines` (a deleted or emptied file) and a file without hunks (binary,
+   pure rename) need the file's `ref`. A `truncated` hunk was cut short.
+   Add `--lines 3` to see context around each hunk.
 5. Write nodes, edges, flows, claims and notes (rules below).
 6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
@@ -51,6 +57,17 @@ already.
    `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
 8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
    page to `.review/generated/change-<task>.html`.
+
+## File shape
+
+```json
+{ "version": 1, "summary": "<what was asked, what you did>",
+  "repos": [...], "nodes": [...], "edges": [...], "flows": [...],
+  "claims": [...], "notes": [...] }
+```
+
+`version`, `summary`, `repos` and `nodes` are required; the rest may be
+left out. Write no other top-level field.
 
 ## Nodes
 
@@ -75,10 +92,11 @@ Endpoints, queues and external services get a node without `ref`.
 
 ## Languages
 
-Set `languages` on each repo you reference, context repos included: glob to language name,
+`gather` sets `languages` for the changed files: glob to language name,
 first match wins, e.g. `{ "**/*.tsx": "tsx", "**/*.ts": "typescript" }`.
-Cover every file you reference. For a file the globs can't describe, add
-`"language"` on its ref. Valid names: `task-view languages`.
+Add globs for every other file you reference, context repos included. For
+a file the globs can't describe, add `"language"` on its ref. Valid names:
+`task-view languages`.
 
 ## Edges
 
@@ -99,13 +117,15 @@ that, so write no notes explaining it.
 ## Flows
 
 One flow per user-visible or caller-visible path your change affects:
-`path` lists node ids from the entry point through the changed code to the
-boundary; `tests` lists the test nodes that exercise it.
+`{ "id", "title", "path": [...], "tests": [...] }`. `title` says the path
+in a reader's words; `path` lists node ids from the entry point through the
+changed code to the boundary; `tests` lists the test nodes that exercise it.
 
 ## Claims and notes
 
-- `claims`: statements a reviewer might doubt, each with `evidence` refs
-  (usually `site` or `range`). Without evidence, put it in `notes` instead.
+- `claims`: statements a reviewer might doubt,
+  `{ "text", "about": [node ids], "evidence": [refs] }` (usually `site` or
+  `range` refs). Without evidence, put it in `notes` instead.
 - `notes`: doubts, shortcuts, things not done, assumptions. Plain sentences.
   Say what you didn't verify.
 
@@ -115,6 +135,6 @@ boundary; `tests` lists the test nodes that exercise it.
   or the code, and mention it in `notes` if the account was wrong.
 - Never claim tests passed unless you saw the output in this session.
 - Never leave changed lines out because they seem trivial.
-- Never list commits out of order or skip one; if you commit or edit files
-  again after writing the review file, update `commits` and every affected
-  line number, then validate again.
+- Never edit `commits` by hand. If you commit or edit files again after
+  writing the review file, run `gather` again, update `repos` and every
+  affected line number, then validate again.

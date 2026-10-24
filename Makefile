@@ -26,7 +26,7 @@ lint:
 check: vet lint test
 
 golden:
-	go test ./cmd/task-view -run TestValidReviewGolden -update
+	go test ./cmd/task-view -run 'TestValidReviewGolden|TestGatherGolden' -update
 
 # docs/TASK_REVIEW.md is generated from the embedded copy in
 # internal/instructions so the two never drift; edit that one instead.

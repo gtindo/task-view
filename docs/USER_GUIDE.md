@@ -194,7 +194,10 @@ task". The copy attached to each release matches that release. After you update
 1. **Give the agent a task** and let it work on its own. It works across one
    or more local repos (for example a client and its mock server).
 2. **When it finishes, the agent writes `.review/change-<task>.json`** in the
-   repo where the task started, named after the task, then runs
+   repo where the task started, named after the task. It starts from
+   `task-view gather`, which prints the commits, the changed files and their
+   hunks exactly as the checks will read them, so it only has to describe
+   the change, not collect it. Then it runs
    `task-view validate .review/change-<task>.json --format json` and fixes
    the file until it validates. It adds `.review/` to `.git/info/exclude`, so
    the file is never committed. Each task gets its own file.
@@ -219,7 +222,8 @@ did:
 > Run `task-view instructions` and write `.review/change-<name>.json` for commit
 > `<sha>` (and the commits since `<start>` if several). Don't change any code.
 
-The agent lists those commits in the file. Unrelated uncommitted files in the
+The agent gathers them with `task-view gather --base <sha>^ --tip <sha>`
+(or `--base <start>` for several) and lists those commits in the file. Unrelated uncommitted files in the
 repo then show as an `uncommitted_changes` warning, which is expected.
 
 ## 4. Reading the page
@@ -295,6 +299,7 @@ test result is always the agent's word.
 | --- | --- |
 | `task-view open <file> [--out <path>] [--no-browser]` | Check the file, write the HTML page and open it |
 | `task-view validate <file> [--format text\|json]` | Check the file and print errors and warnings (`json` is for agents) |
+| `task-view gather [<path>[=<base>]...] [--base <rev>] [--tip <rev>] [--context <path>]` | Print what the agent describes: the repos and commits of a change and every changed file with its hunks. Read-only; for the agent |
 | `task-view instructions` | Print the agent instructions (`TASK_REVIEW.md`) |
 | `task-view schema` | Print the JSON Schema of the review file |
 | `task-view languages` | Print the language names usable for syntax colouring |
