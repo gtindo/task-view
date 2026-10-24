@@ -17,7 +17,8 @@ attention judging the code, not reconstructing it.
 review of one commit of this repository, as an agent described it. Nothing to
 install: click around the graph, open any piece, switch views. There is also
 [a review where the account is wrong](https://gtindo.github.io/task-view/broken.html),
-to see what the checks catch.
+to see what the checks catch. Which model to use, and what a review costs,
+is in the [benchmark](#benchmark).
 
 ## What you get
 
@@ -219,6 +220,35 @@ points at text missing from its line, and changed CSS lines that no node
 mentions.
 
 ![A review with one contradicted edge and one unmentioned change, under a red error banner](docs/images/findings.png)
+
+## Benchmark
+
+Which model should write the review, and what does it cost?
+[BENCH.md](BENCH.md) measures it on ten real tasks from
+[httpx](https://github.com/encode/httpx), [hono](https://github.com/honojs/hono),
+[axum](https://github.com/tokio-rs/axum) and
+[flowmap](https://github.com/gtindo/flowmap), from a 21-line fix to a
+5,187-line change made with agents. The 1.1.0 run covered 180 reviews written
+through Claude Code with Haiku, Sonnet and Opus 5.5 at medium and high effort,
+three times each. Every one accounted for its whole diff.
+**[See the results as charts →](https://claude.ai/artifact/J5NQkrcbKVjaX6gSLDGs9g)**
+
+- **Haiku 5.5 at medium effort is enough for the task.** All 30 of its
+  reviews were accurate and its maps stayed consistent from run to run at
+  every size, for US$0.01 per review on a small fix up to US$0.32 on the
+  5,187-line change.
+- **Opus 5.5 steadies the granularity.** Its repeats split a change into
+  nearly the same nodes: node agreement of 0.85 to 0.96 on big and
+  agent-scale changes, against about 0.7 for Haiku. It costs about US$1 to
+  US$3 per review at those sizes.
+- **Sonnet 5.5 is the balance:** it costs between the two and is the
+  fastest. At medium effort its first review file fails the schema check
+  more often (the first `validate` passed in 21 of 30 runs, against 27 for
+  Haiku), so the agent needs extra validate rounds to fix it.
+
+Costs are the API list price of each session. How the cases were chosen, how
+to rerun the benchmark with another model or harness, and its known biases
+are in [bench/README.md](bench/README.md).
 
 ## Guides
 
