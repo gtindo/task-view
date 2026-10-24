@@ -1,20 +1,15 @@
 # task-view
 
-**Review an agent's change as a map of how it fits together, not as a flat
-list of diffs.**
+**Your agent changed 14 files. `task-view` shows you how they fit together.**
 
-When a coding agent writes most of the code, reviewing it means opening the
-changed files in your IDE one by one and rebuilding in your head what calls
-what, which path a request now takes, and which test covers which piece. The
-diff shows lines; the structure of the change is left for you to work out.
+Reviewing that change usually means opening each file in your IDE and
+rebuilding in your head what calls what, which path a request now takes, and
+which test covers which piece. The diff shows lines; the structure is left
+for you to work out.
 
-`task-view` puts that structure on the page for you. When the agent finishes
-a task, it describes its change: the functions, components and tests it
-touched, why, how they relate, and the user-visible flows they form.
-`task-view` turns that into one page you read in the browser: a graph of the
-change, its flows step by step, and each piece's code next to the agent's
-reason for it. You spend your attention judging the code, not reconstructing
-it.
+`task-view` puts that structure on one page: a graph of the change, its flows
+step by step, and each piece's code next to why it changed. You spend your
+attention judging the code, not reconstructing it.
 
 ![A review page in use: the graph of the change, a node's reason and diff in the inspector, the code after the change, an edge and the line it rests on, then the flows, diff map and claims views](docs/images/demo.gif)
 
@@ -250,6 +245,11 @@ looks at the folders next to them and warns (`unlisted_repo`) about Git repos
 with uncommitted changes that the review doesn't list.
 
 ## How it works
+
+When the agent finishes a task, it describes its change: the functions,
+components and tests it touched, why, how they relate, and the user-visible
+flows they form. `task-view` checks that account against Git and turns it
+into the page you read in the browser.
 
 ```mermaid
 flowchart LR
