@@ -1,0 +1,55 @@
+# Rebuilds the live demo (make demo) with the current page and publishes it
+# to GitHub Pages whenever code that shapes the page lands on main.
+name: demo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "demo/**"
+      - "Makefile"
+      - ".github/workflows/demo.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push replaces a queued one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the demo reviews describe an older commit of this repo.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build the demo pages
+        run: make demo VERSION="main-${GITHUB_SHA::7}"
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

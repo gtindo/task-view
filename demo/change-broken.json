@@ -1,0 +1,355 @@
+{
+  "version": 1,
+  "summary": "The inspector's code box gets Diff and After tabs. After shows the referenced code as it reads in the final state, without removed lines; for a `file` ref on a modified file the page data now also carries the whole final file. The chosen tab is remembered across nodes and reloads.",
+  "repos": [
+    {
+      "id": "task-view",
+      "path": ".",
+      "commits": [
+        "12199940391020372c51b1f669dfa83b4f4c8bee"
+      ],
+      "languages": {
+        "**/*.go": "go",
+        "**/*.js": "javascript",
+        "**/*.css": "css",
+        "**/*.md": "markdown"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "excerpt-struct",
+      "kind": "code",
+      "label": "excerpt (page data)",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/data.go",
+        "lines": [
+          25,
+          39
+        ]
+      },
+      "why": "Carries the whole final file for a `file` ref, which the page cannot rebuild from hunk rows alone."
+    },
+    {
+      "id": "builder-excerpt",
+      "kind": "code",
+      "label": "builder.excerpt",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/data.go",
+        "lines": [
+          387,
+          508
+        ]
+      },
+      "why": "Fills the After rows for a `file` ref on a modified file, marking added lines and capping the size like the diff rows."
+    },
+    {
+      "id": "code-mode-pref",
+      "kind": "code",
+      "label": "codeMode preference",
+      "change": "added",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "lines": [
+          150,
+          150
+        ]
+      },
+      "why": "Remembers the chosen tab so the reviewer does not switch it again on every node."
+    },
+    {
+      "id": "node-inspector",
+      "kind": "component",
+      "label": "nodeInspector",
+      "change": "unchanged",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "lines": [
+          1218,
+          1270
+        ]
+      }
+    },
+    {
+      "id": "excerpt-box",
+      "kind": "component",
+      "label": "excerptBox",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "lines": [
+          1046,
+          1088
+        ]
+      },
+      "why": "Adds the Diff / After tabs and redraws the code table when the tab changes."
+    },
+    {
+      "id": "after-rows",
+      "kind": "code",
+      "label": "afterRows",
+      "change": "added",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "lines": [
+          1013,
+          1017
+        ]
+      },
+      "why": "Picks the final-state rows: the whole file when the page has it, otherwise the excerpt without removed lines."
+    },
+    {
+      "id": "code-table",
+      "kind": "component",
+      "label": "codeTable",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "lines": [
+          995,
+          1012
+        ]
+      },
+      "why": "Renders the After layout: one line-number column and no +/\u2212 signs."
+    },
+    {
+      "id": "test-open-writes-page",
+      "kind": "test",
+      "label": "TestOpenWritesPage",
+      "change": "unchanged",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "cmd/change-view/main_test.go",
+        "lines": [
+          215,
+          238
+        ]
+      },
+      "meta": {
+        "command": "go test ./...",
+        "observed": "passed"
+      }
+    },
+    {
+      "id": "readme-page",
+      "kind": "doc",
+      "label": "README: the page",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "README.md",
+        "lines": [
+          76,
+          78
+        ]
+      },
+      "why": "Mentions the Diff and After tabs."
+    },
+    {
+      "id": "guide-inspector",
+      "kind": "doc",
+      "label": "User guide: inspector",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "release/USER_GUIDE.md",
+        "lines": [
+          151,
+          153
+        ]
+      },
+      "why": "Explains what each tab shows."
+    },
+    {
+      "id": "spec-graph-view",
+      "kind": "doc",
+      "label": "Spec: graph view",
+      "change": "modified",
+      "ref": {
+        "type": "range",
+        "repo": "task-view",
+        "file": "specs/init.md",
+        "lines": [
+          326,
+          326
+        ]
+      },
+      "why": "Specifies the two tabs and what After shows for range and file refs."
+    }
+  ],
+  "edges": [
+    {
+      "from": "builder-excerpt",
+      "to": "excerpt-struct",
+      "kind": "fills",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/data.go",
+        "line": 500,
+        "contains": "x.After = append"
+      }
+    },
+    {
+      "from": "node-inspector",
+      "to": "excerpt-box",
+      "kind": "renders",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "line": 1268,
+        "contains": "excerptBox(n.excerpt"
+      }
+    },
+    {
+      "from": "excerpt-box",
+      "to": "code-mode-pref",
+      "kind": "depends",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "line": 1067,
+        "contains": "state.codeMode === \"after\""
+      }
+    },
+    {
+      "from": "excerpt-box",
+      "to": "after-rows",
+      "kind": "calls",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "line": 1069,
+        "contains": "visibleRows(x)"
+      }
+    },
+    {
+      "from": "excerpt-box",
+      "to": "code-table",
+      "kind": "calls",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "line": 1069,
+        "contains": "codeTable(after"
+      }
+    },
+    {
+      "from": "after-rows",
+      "to": "excerpt-struct",
+      "kind": "depends",
+      "ref": {
+        "type": "site",
+        "repo": "task-view",
+        "file": "internal/render/assets/app.js",
+        "line": 1016,
+        "contains": "x.after ||"
+      }
+    },
+    {
+      "from": "test-open-writes-page",
+      "to": "builder-excerpt",
+      "kind": "tests"
+    }
+  ],
+  "flows": [
+    {
+      "id": "read-after",
+      "path": [
+        "builder-excerpt",
+        "excerpt-struct",
+        "after-rows",
+        "excerpt-box",
+        "code-table"
+      ],
+      "tests": [
+        "test-open-writes-page"
+      ],
+      "title": "Reviewer reads a node's code after the change"
+    },
+    {
+      "id": "switch-tab",
+      "path": [
+        "node-inspector",
+        "excerpt-box",
+        "code-mode-pref"
+      ],
+      "tests": [],
+      "title": "Reviewer switches the code tab"
+    }
+  ],
+  "claims": [
+    {
+      "text": "The tabs appear only when the excerpt shows a change in the final state, so unchanged and initial-state code keep a single view.",
+      "evidence": [
+        {
+          "type": "site",
+          "repo": "task-view",
+          "file": "internal/render/assets/app.js",
+          "line": 1064,
+          "contains": "x.stateKind === \"final\""
+        }
+      ]
+    },
+    {
+      "text": "Range and site refs need no new page data: After drops the removed rows from the existing excerpt.",
+      "evidence": [
+        {
+          "type": "range",
+          "repo": "task-view",
+          "file": "internal/render/assets/app.js",
+          "lines": [
+            1015,
+            1017
+          ]
+        }
+      ]
+    },
+    {
+      "text": "The chosen tab survives a reload.",
+      "evidence": [
+        {
+          "type": "site",
+          "repo": "task-view",
+          "file": "internal/render/assets/app.js",
+          "line": 1077,
+          "contains": "savePref(\"cv-code\", mode)"
+        },
+        {
+          "type": "site",
+          "repo": "task-view",
+          "file": "internal/render/assets/app.js",
+          "line": 150,
+          "contains": "loadPref(\"cv-code\""
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "No automated test covers the tabs in app.js; TestOpenWritesPage only checks that the page is written and embeds the review data.",
+    "The After rows for a whole file are capped at the same row limit as the diff rows; a very long file shows the truncation note."
+  ]
+}

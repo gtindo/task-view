@@ -1,8 +1,9 @@
-.PHONY: build install test vet lint check golden docs release clean
+.PHONY: build install test vet lint check golden docs demo release clean
 
 VERSION ?= 0.1.0
 ESLINT := npx --yes eslint@10.12.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
+DEMO_COMMIT := 12199940391020372c51b1f669dfa83b4f4c8bee
 
 build:
 	go build -o bin/task-view ./cmd/task-view
@@ -32,6 +33,21 @@ golden:
 docs:
 	go run ./cmd/task-view instructions > docs/TASK_REVIEW.md
 
+# The live demo in site/: the reviews in demo/ describe DEMO_COMMIT of this
+# repo. They are opened in a throwaway clone checked out at that commit, so
+# the page matches the state the agent described and carries no head_ahead
+# warning for the commits made since. change-broken.json is wrong on purpose:
+# its page renders with exit 1 and the red error banner.
+demo:
+	go build -ldflags "$(LDFLAGS)" -o bin/task-view ./cmd/task-view
+	rm -rf site && mkdir -p site
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	git clone --quiet --no-checkout . "$$tmp/repo" && \
+	git -C "$$tmp/repo" checkout --quiet --detach $(DEMO_COMMIT) && \
+	mkdir "$$tmp/repo/.review" && cp demo/*.json "$$tmp/repo/.review/" && \
+	bin/task-view open "$$tmp/repo/.review/change-show-code-after.json" --no-browser --out "$(CURDIR)/site/index.html" && \
+	{ bin/task-view open "$$tmp/repo/.review/change-broken.json" --no-browser --out "$(CURDIR)/site/broken.html" || test $$? -eq 1; }
+
 # Cross-compiled binaries plus the guides from docs/, the agent skill and
 # the licenses (the page embeds vendored libraries), in release/. The
 # tag-triggered workflow in .github/workflows/release.yml uploads this folder
@@ -49,4 +65,4 @@ release: docs
 	cd release && shasum -a 256 task-view-* > SHA256SUMS
 
 clean:
-	rm -rf bin dist release
+	rm -rf bin dist release site
