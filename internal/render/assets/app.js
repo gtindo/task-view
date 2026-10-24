@@ -764,8 +764,12 @@
   function select(selection) {
     state.selection = selection;
     renderInspector();
-    if (state.view === "graph" && revealInGraph(selection)) renderView();
-    else highlightSelection();
+    if (state.view === "graph" && revealInGraph(selection)) {
+      syncFilterToggles();
+      refreshGraph();
+    } else {
+      highlightSelection();
+    }
     writeHash();
   }
 
@@ -774,6 +778,11 @@
   // ── Graph view ─────────────────────────────────────────────
   let graph = null;
   let overlay = null;
+  let overlayLayer = null;
+  // The HTML card drawn over each graph node, by graph node id.
+  const overlayLabels = new Map();
+  // Bumped per layout so a slower, superseded run never settles the camera.
+  let layoutRun = 0;
   let tooltipEl = null;
 
   function cssVar(name) {
@@ -936,6 +945,8 @@
           "underlay-shape": "round-rectangle",
         },
       },
+      // Elements a filter just added stay invisible until the layout has placed them.
+      { selector: ".entering", style: { opacity: 0 } },
     ];
   }
 
@@ -1029,7 +1040,9 @@
     minReadableZoom: 0.5,
     largeGraphZoom: 0.62,
   };
-  const ANIMATION_MS = { pan: 220, zoom: 160, keepInView: 200 };
+  const ANIMATION_MS = { pan: 220, zoom: 160, keepInView: 200, relayout: 320 };
+  const RELAYOUT_EASING = "ease-in-out-cubic";
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
   function focusFirstSearchHit() {
     const hit = graph.nodes(".hit").first();
@@ -1043,9 +1056,12 @@
   function graphToolbar() {
     const directionButton = (direction, label, title) => el("button", {
       class: state.direction === direction ? "on" : "",
-      onclick: () => {
+      onclick: (event) => {
+        if (state.direction === direction) return;
+
         state.direction = direction;
-        renderView();
+        event.currentTarget.parentElement.querySelectorAll("button").forEach((button) => button.classList.toggle("on", button === event.currentTarget));
+        refreshGraph();
       },
       title,
     }, label);
@@ -1062,8 +1078,9 @@
         checked: state[key],
         onchange: (event) => {
           state[key] = event.target.checked;
-          renderView();
+          refreshGraph();
         },
+        "data-toggle": key,
       }),
       el("span", { class: "sw" }),
       `${label} (${count})`);
@@ -1199,8 +1216,9 @@
 
     return {
       name: typeof cytoscapeElk !== "undefined" ? "elk" : "breadthfirst",
-      fit: true,
-      padding: GRAPH_CAMERA.padding,
+      // settleCamera places the camera instead, so it can clamp the zoom in
+      // the same motion as the nodes move.
+      fit: false,
       animate: false,
       nodeDimensionsIncludeLabels: false,
       nodeLayoutOptions: (layoutNode) => (layoutNode.isParent() ? spacing : {}),
@@ -1213,19 +1231,120 @@
     };
   }
 
-  // The zoom the graph opens at once the layout has fitted it.
-  function startViewport() {
-    if (graph.zoom() > GRAPH_CAMERA.maxStartZoom) {
-      graph.zoom(GRAPH_CAMERA.maxStartZoom);
-      graph.center();
-    }
-    // Large graphs: start readable at the first flow's entry, not as a speck.
-    if (graph.zoom() < GRAPH_CAMERA.minReadableZoom) {
-      const first = reviewData.flows.length && graph.getElementById(reviewData.flows[0].path[0]);
-      const anchor = first && first.length ? first : graph.nodes().not(".repo").first();
+  // The camera a laid-out graph settles on: fitted to box, never closer than
+  // maxStartZoom, and when fitting would shrink it to a speck, readable at
+  // anchor (a point in graph coordinates, or null) instead.
+  function settledCamera(box, anchor, width, height) {
+    const padding = GRAPH_CAMERA.padding;
+    const fitZoom = Math.min((width - 2 * padding) / box.w, (height - 2 * padding) / box.h);
+    const isUnreadable = fitZoom < GRAPH_CAMERA.minReadableZoom && anchor;
+    const zoom = isUnreadable ? GRAPH_CAMERA.largeGraphZoom : Math.min(fitZoom, GRAPH_CAMERA.maxStartZoom);
+    const center = isUnreadable ? anchor : { x: box.x1 + box.w / 2, y: box.y1 + box.h / 2 };
 
-      graph.zoom(GRAPH_CAMERA.largeGraphZoom);
-      graph.center(anchor);
+    return { zoom, pan: { x: width / 2 - zoom * center.x, y: height / 2 - zoom * center.y } };
+  }
+
+  // Moves the camera onto the laid-out graph; positionOf gives a node's final position.
+  function settleCamera(positionOf, isAnimated) {
+    const leafNodes = graph.nodes().not(".repo");
+
+    if (leafNodes.empty()) return;
+
+    const entry = reviewData.flows.length ? graph.getElementById(reviewData.flows[0].path[0]) : graph.collection();
+    const anchorNode = entry.length ? entry : leafNodes.first();
+    const box = graph.elements().boundingBoxAt(positionOf);
+    const camera = settledCamera(box, positionOf(anchorNode), graph.width(), graph.height());
+
+    if (!isAnimated) {
+      graph.viewport(camera);
+
+      return;
+    }
+
+    graph.animate(camera, { duration: ANIMATION_MS.relayout, easing: RELAYOUT_EASING });
+  }
+
+  // Lays the graph out and settles the camera. Animated, the nodes and the
+  // camera glide from where they are, while nodes marked entering appear at
+  // their final place and fade in.
+  function runGraphLayout(isAnimated) {
+    const run = ++layoutRun;
+    const finalPositions = new Map();
+    const layout = graph.layout({
+      ...graphLayoutOptions(),
+      animate: isAnimated,
+      animationDuration: ANIMATION_MS.relayout,
+      animationEasing: RELAYOUT_EASING,
+      animateFilter: (layoutNode) => !layoutNode.hasClass("entering"),
+      transform: (layoutNode, position) => {
+        finalPositions.set(layoutNode.id(), position);
+
+        return position;
+      },
+    });
+
+    layout.on("layoutready", () => {
+      if (run !== layoutRun) return;
+
+      settleCamera((graphNode) => finalPositions.get(graphNode.id()) || graphNode.position(), isAnimated);
+      graph.elements(".entering").removeClass("entering");
+      requestOverlaySync();
+    });
+
+    // Dimming is applied before the layout so entering nodes fade straight
+    // to their final opacity instead of fading in and then dimming.
+    highlightSelection();
+    applySearch();
+    layout.run();
+  }
+
+  // Brings the graph in line with the filters without rebuilding it, so the
+  // nodes that stay glide to their new places instead of the view jumping.
+  function refreshGraph() {
+    if (!graph) {
+      renderView();
+
+      return;
+    }
+
+    const wanted = graphElements();
+    const wantedIds = new Set(wanted.map((element) => element.data.id));
+    const leaving = graph.elements().filter((element) => !wantedIds.has(element.id()));
+    const entering = wanted
+      .filter((element) => graph.getElementById(element.data.id).empty())
+      .map((element) => ({ ...element, classes: element.classes + " entering" }));
+
+    graph.stop(true);
+    graph.elements().stop(true);
+    hideTooltip();
+    removeOverlayLabels(leaving.nodes());
+    graph.remove(leaving);
+    addOverlayLabels(graph.add(entering).nodes());
+    runGraphLayout(!reducedMotion.matches);
+  }
+
+  function addOverlayLabels(graphNodes) {
+    graphNodes.forEach((graphNode) => {
+      const label = overlayLabel(graphNode);
+
+      // Hidden from the start so an entering card never flashes before its first sync.
+      label.classList.toggle("entering", graphNode.hasClass("entering"));
+      overlayLayer.appendChild(label);
+      overlayLabels.set(graphNode.id(), label);
+    });
+  }
+
+  function removeOverlayLabels(graphNodes) {
+    graphNodes.forEach((graphNode) => {
+      overlayLabels.get(graphNode.id())?.remove();
+      overlayLabels.delete(graphNode.id());
+    });
+  }
+
+  // Shows each filter switch as on or off after a selection turned filters on.
+  function syncFilterToggles() {
+    for (const input of toolbarEl.querySelectorAll("input[data-toggle]")) {
+      input.checked = state[input.dataset.toggle];
     }
   }
 
@@ -1240,10 +1359,10 @@
 
     const wrap = el("div", { class: "graph-wrap" });
     const container = el("div", { class: "cy" });
-    const layer = el("div", { class: "cy-layer" });
 
+    overlayLayer = el("div", { class: "cy-layer" });
     overlay = el("div", { class: "cy-overlay" });
-    overlay.appendChild(layer);
+    overlay.appendChild(overlayLayer);
     wrap.append(container, overlay);
     wrap.appendChild(graphControls());
     wrap.appendChild(legend());
@@ -1266,14 +1385,7 @@
     });
 
     // HTML overlay for rich node content.
-    const labels = new Map();
-
-    graph.nodes().forEach((graphNode) => {
-      const label = overlayLabel(graphNode);
-
-      layer.appendChild(label);
-      labels.set(graphNode.id(), label);
-    });
+    addOverlayLabels(graph.nodes());
 
     let frameRequest = 0;
     const syncOverlay = () => {
@@ -1282,9 +1394,9 @@
       const pan = graph.pan();
       const zoom = graph.zoom();
 
-      layer.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+      overlayLayer.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
       graph.nodes().forEach((graphNode) => {
-        const label = labels.get(graphNode.id());
+        const label = overlayLabels.get(graphNode.id());
 
         if (!label) return;
 
@@ -1293,6 +1405,7 @@
         label.style.left = position.left + "px";
         label.style.top = position.top + "px";
         label.classList.toggle("dim", graphNode.hasClass("dim") || graphNode.hasClass("miss"));
+        label.classList.toggle("entering", graphNode.hasClass("entering"));
       });
     };
     const scheduleSync = () => {
@@ -1339,15 +1452,7 @@
       container.style.cursor = "";
     });
 
-    const layout = graph.layout(graphLayoutOptions());
-
-    layout.on("layoutstop", () => {
-      startViewport();
-      highlightSelection();
-      applySearch();
-      scheduleSync();
-    });
-    layout.run();
+    runGraphLayout(false);
   }
 
   // The overlay of the last graph view registers its sync; it outlives the graph.
@@ -1387,6 +1492,7 @@
       graph.destroy();
       graph = null;
     }
+    overlayLabels.clear();
     hideTooltip();
   }
 
@@ -1428,18 +1534,19 @@
   function legend() {
     const swatch = (style) => el("span", { class: "sw", style });
     const lineSample = (style) => el("span", { class: "ln", style });
-    const setLegendShown = (isShown) => {
+    // Swaps only the legend, so showing or hiding it leaves the graph untouched.
+    const setLegendShown = (event, isShown) => {
       state.legend = isShown;
       savePref("cv-legend", isShown ? "1" : "0");
-      renderView();
+      event.currentTarget.closest(".legend, .legend-btn").replaceWith(legend());
     };
 
     if (!state.legend) {
-      return el("button", { class: "legend-btn", onclick: () => setLegendShown(true), html: icon("info", "sm") + "Legend" });
+      return el("button", { class: "legend-btn", onclick: (event) => setLegendShown(event, true), html: icon("info", "sm") + "Legend" });
     }
 
     return el("div", { class: "legend" },
-      el("button", { class: "icon-btn legend-x", title: "Hide legend", html: icon("close", "sm"), onclick: () => setLegendShown(false) }),
+      el("button", { class: "icon-btn legend-x", title: "Hide legend", html: icon("close", "sm"), onclick: (event) => setLegendShown(event, false) }),
       el("h6", null, "Reference status"),
       el("div", { class: "lg" }, swatch({ border: "1.5px solid var(--text-2)" }), "Verified"),
       el("div", { class: "lg" }, swatch({ border: "2.5px solid var(--bad)" }), "Contradicted"),

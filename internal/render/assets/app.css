@@ -315,6 +315,9 @@ svg.i.lg { width: 18px; height: 18px; }
 .gn .says.passed { color: var(--ok); }
 .gn .says.failed { color: var(--bad); }
 .gn.dim, .gl.dim { opacity: 0.28; }
+/* Fades in step with the canvas nodes' 120ms opacity transition. */
+.gn, .gl { transition: opacity 0.12s; }
+.gn.entering, .gl.entering { opacity: 0; }
 .gl { position: absolute; display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); white-space: nowrap; }
 .gl .role { text-transform: none; letter-spacing: 0; font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
 .graph-controls { position: absolute; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); }
