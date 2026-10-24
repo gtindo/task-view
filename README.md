@@ -173,7 +173,7 @@ repository, described by an agent.
 ### Graph
 
 The whole change at a glance: source-code nodes grouped by repo, endpoints
-between repos. Tests, docs and unchanged nodes sit behind the toolbar
+between repos. Tests, docs, import lines and unchanged nodes sit behind the toolbar
 switches. Search with `/`, click a node to focus on it and its neighbours.
 
 ![The graph view of a review: changed functions and components, grouped by repo, with the relations between them](docs/images/graph.png)

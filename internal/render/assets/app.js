@@ -273,6 +273,7 @@
     showUnchanged: true,
     showTests: false,
     showDocs: false,
+    showImports: false,
     direction: "RIGHT",
     query: "",
     diffFilter: "all",
@@ -938,11 +939,14 @@
     ];
   }
 
-  // The graph opens on source code only; tests and docs sit behind toggles.
+  // The graph opens on source code only; tests, docs and import lines sit
+  // behind toggles, each named by the state key that shows its group.
   const DOC_FILE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
+  const GROUP_TOGGLES = { test: "showTests", doc: "showDocs", imports: "showImports" };
 
   function nodeGroup(node) {
     if (node.kind === "test") return "test";
+    if (node.kind === "imports") return "imports";
 
     const isDoc = kindIcon(node.kind) === "doc" || (node.ref && node.ref.file && DOC_FILE.test(node.ref.file));
 
@@ -954,7 +958,8 @@
   function inGraph(node) {
     const group = nodeGroup(node);
     const changeShown = state.showUnchanged || node.change !== "unchanged";
-    const groupShown = (group !== "test" || state.showTests) && (group !== "doc" || state.showDocs);
+    const toggleKey = GROUP_TOGGLES[group];
+    const groupShown = !toggleKey || state[toggleKey];
 
     return changeShown && groupShown;
   }
@@ -973,8 +978,7 @@
       const group = nodeGroup(node);
 
       if (node.change === "unchanged") state.showUnchanged = true;
-      if (group === "test") state.showTests = true;
-      if (group === "doc") state.showDocs = true;
+      if (GROUP_TOGGLES[group]) state[GROUP_TOGGLES[group]] = true;
     });
 
     return hidden.length > 0;
@@ -1051,6 +1055,7 @@
     const unchangedCount = reviewData.nodes.filter((node) => node.change === "unchanged").length;
     const testCount = reviewData.nodes.filter((node) => nodeGroup(node) === "test").length;
     const docCount = reviewData.nodes.filter((node) => nodeGroup(node) === "doc").length;
+    const importsCount = reviewData.nodes.filter((node) => nodeGroup(node) === "imports").length;
     const toggle = (key, label, count, title) => el("label", { class: "toggle", title },
       el("input", {
         type: "checkbox",
@@ -1082,7 +1087,7 @@
       },
     });
 
-    // A review without tests or docs gets no switch for them. Native append
+    // A review without tests, docs or imports gets no switch for them. Native append
     // would print a skipped switch as the text "null", so drop it first.
     const toolbarItems = [
       search,
@@ -1090,6 +1095,7 @@
       toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
       testCount ? toggle("showTests", "Tests", testCount, "Show test nodes") : null,
       docCount ? toggle("showDocs", "Docs", docCount, "Show documentation nodes") : null,
+      importsCount ? toggle("showImports", "Imports", importsCount, "Show nodes for import and other top-level lines") : null,
       el("span", { class: "tb-sep" }),
       directionToggle,
     ];

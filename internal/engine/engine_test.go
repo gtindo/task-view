@@ -230,3 +230,32 @@ func TestHunkEvidenceLines(t *testing.T) {
 		t.Errorf("context asked for: %+v", withContext.Context)
 	}
 }
+
+func TestAttributeBlankLines(t *testing.T) {
+	text := map[int]string{10: "", 11: "  \t", 12: "x", 20: "", 30: ""}
+	textAt := func(line int) string { return text[line] }
+	spans := []span{{start: 1, end: 9, node: "above"}, {start: 31, end: 40, node: "below"}}
+
+	cases := []struct {
+		name      string
+		lines     []int
+		remaining []int
+		owners    []string
+	}{
+		{"blank run after a node", []int{10, 11}, nil, []string{"above"}},
+		{"blank line before a node", []int{30}, nil, []string{"below"}},
+		{"blank line with no node beside it", []int{20}, []int{20}, nil},
+		{"run with a non-blank line", []int{10, 11, 12}, []int{10, 11, 12}, nil},
+	}
+	for _, testCase := range cases {
+		remaining, owners := attributeBlankLines(testCase.lines, textAt, spans)
+		ownerNodes := make([]string, 0, len(owners))
+		for _, owner := range owners {
+			ownerNodes = append(ownerNodes, owner.node)
+		}
+
+		if !slices.Equal(remaining, testCase.remaining) || !slices.Equal(ownerNodes, testCase.owners) {
+			t.Errorf("%s: remaining %v owners %v, want %v %v", testCase.name, remaining, ownerNodes, testCase.remaining, testCase.owners)
+		}
+	}
+}

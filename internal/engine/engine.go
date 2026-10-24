@@ -536,7 +536,48 @@ func (h *HunkCoverage) coverAddition(spans fileSpans) ([]int, []int) {
 		}
 	}
 
+	addedText := func(line int) string { return hunk.New[line-hunk.NewStart] }
+	uncovered, blankOwners := attributeBlankLines(uncovered, addedText, spans.final)
+	for _, owner := range blankOwners {
+		h.addNode(owner)
+	}
+
+	testSpans := slices.DeleteFunc(slices.Clone(spans.final), func(finalSpan span) bool { return !finalSpan.test })
+	untested, _ = attributeBlankLines(untested, addedText, testSpans)
+
 	return uncovered, untested
+}
+
+// attributeBlankLines drops from lines each run that holds only whitespace
+// and touches a line one of spans contains, and returns the lines left and
+// the spans that took a run. A blank line carries nothing to review, so it
+// belongs to the node it touches instead of asking for a range stretched by
+// one line; a blank run with no node beside it still counts.
+func attributeBlankLines(lines []int, textAt func(int) string, spans []span) ([]int, []span) {
+	var remaining []int
+	var owners []span
+	for _, run := range runs(lines) {
+		first, last := run[0], run[1]
+		runLines := make([]int, 0, last-first+1)
+		allBlank := true
+		for line := first; line <= last; line++ {
+			runLines = append(runLines, line)
+			allBlank = allBlank && strings.TrimSpace(textAt(line)) == ""
+		}
+
+		ownerIndex := slices.IndexFunc(spans, func(candidate span) bool {
+			return candidate.contains(first-1) || candidate.contains(last+1)
+		})
+		if !allBlank || ownerIndex < 0 {
+			remaining = append(remaining, runLines...)
+
+			continue
+		}
+
+		owners = append(owners, spans[ownerIndex])
+	}
+
+	return remaining, owners
 }
 
 func hunkStatus(uncoveredCount, changedCount int) string {

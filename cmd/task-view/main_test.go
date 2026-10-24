@@ -361,6 +361,39 @@ func TestCodes(t *testing.T) {
 	}
 }
 
+// A blank line added next to a node is covered by it; one with no node
+// beside it is still an unmentioned hunk.
+func TestBlankLinesBelongToTheirNode(t *testing.T) {
+	cases := []struct {
+		name       string
+		after      string
+		unmentions int
+	}{
+		{"next to a node", "export const c = 30;\n", 0},
+		{"far from any node", "// end\n", 1},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			set := fixture.Build(t)
+			path := filepath.Join(set.Web, "src", "a.ts")
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			withBlank := strings.Replace(string(content), testCase.after, testCase.after+"\n", 1)
+			if err := os.WriteFile(path, []byte(withBlank), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			res := validate(t, set, set.Review())
+			if got := countCodes(res.out.Warnings)["unmentioned_hunk"]; got != testCase.unmentions {
+				t.Errorf("unmentioned_hunk %d, want %d\n%s", got, testCase.unmentions, res.raw)
+			}
+		})
+	}
+}
+
 func TestSiblingsNotScannedByDefault(t *testing.T) {
 	set := fixture.Build(t)
 

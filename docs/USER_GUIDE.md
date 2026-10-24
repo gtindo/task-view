@@ -269,7 +269,7 @@ test result is always the agent's word.
 
 | View | Use it to |
 | --- | --- |
-| **Graph** | See the whole change at once. Nodes are grouped by repo; endpoints sit between repos. Click a node to focus on it and its neighbours. Use the search box (or `/`) to find a node; Enter jumps to it. Toggle unchanged nodes, switch the direction, zoom with the buttons or the trackpad. |
+| **Graph** | See the whole change at once. Nodes are grouped by repo; endpoints sit between repos. Click a node to focus on it and its neighbours. Use the search box (or `/`) to find a node; Enter jumps to it. Toggle unchanged, test, doc and import nodes (tests, docs and import lines start hidden), switch the direction, zoom with the buttons or the trackpad. |
 | **Flows** | Follow each user-visible path step by step, left to right, with the tests hanging under the steps they cover. A dotted connector means the agent gave no reference for that link. |
 | **Diff map** | Check that nothing was left out. Every changed file has a bar showing its hunks: green covered by a node, amber partly covered, red not mentioned at all. Expand a file to read its hunks. "Needs attention" shows only files with gaps; the commit menu (or clicking a commit in the side panel) shows what each commit wrote. |
 | **Claims** | Check statements you might doubt ("the index is unique", "import needs no change"). Expand a piece of evidence to see the exact code or commit it points at. |

@@ -10,7 +10,7 @@ The tool's checks serve one purpose: making sure the review file matches exactly
 
 1. **Views are for the human reviewer.** They show the change as flows, graph, diff map and claims, so the reviewer can validate the work without reading it line by line.
 2. **Checks are for the review file.** `validate` tells the agent where its account doesn't match the repos: wrong lines, a missed hunk, a wrong change state. The agent fixes the file until it is accurate. Checks say nothing about whether the code is correct.
-3. **The account must match the diff exactly.** Every changed line belongs to a node, every reference resolves to what it claims. An accurate file is the precondition for trustworthy views.
+3. **The account must match the diff exactly.** Every changed line belongs to a node (a blank line counts for the node it touches), every reference resolves to what it claims. An accurate file is the precondition for trustworthy views.
 4. **Claims point at facts.** Every element the agent describes carries a reference the tool can resolve: repo, file, line range, line content, commit.
 5. **Agent statements stay visible as such.** Some content can't be checked (why a change was made, which tests passed). It is shown, marked as the agent's word, never styled as checked.
 6. **Filesystem and Git only.** The tool reads files and runs read-only Git commands. It never runs tests, builds, linters or language tooling.
@@ -161,7 +161,7 @@ The input is one JSON file describing the change as a small graph plus flows and
 | `claims[]` | `{ text, about: [id...], evidence: [ref...] }`: statements such as "the mock response now has a discount field" |
 | `notes[]` | Free text the agent wants the reviewer to see: doubts, shortcuts, things not done |
 
-`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the test-code checks and the graph's test toggle) and `doc`/`docs` (the graph's doc toggle).
+`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the test-code checks and the graph's test toggle), `doc`/`docs` (the graph's doc toggle) and `imports` (the graph's imports toggle). The agent context file still asks for a closed list of node and edge kinds with fixed meanings, so two reviews of one change draw the same map.
 
 ### Languages
 
@@ -299,7 +299,7 @@ Tests are nodes with `file` or `range` refs like any code, so the visualizer can
 
 These run regardless of what the agent wrote and are listed in the side panel's findings on every view:
 
-- **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file`, `range` or `hunk` ref (without `at`). Reported per run of uncovered lines; a binary change or a pure rename has no hunks and needs a `file` ref. A pure deletion is covered by a final-state range touching the removal point or by a `deleted` node's initial-state range.
+- **Unmentioned changes:** diff hunks in any listed repo not covered by a node's `file`, `range` or `hunk` ref (without `at`). Reported per run of uncovered lines; a binary change or a pure rename has no hunks and needs a `file` ref. A pure deletion is covered by a final-state range touching the removal point or by a `deleted` node's initial-state range. A run of added lines that are all blank or whitespace counts as covered, for both checks, by a node whose range holds the line before or after it: blank lines carry nothing to review, and asking for them made agents stretch ranges by one line at random.
 - **Unlisted repos** (only with `--scan-siblings`): sibling repos (same parent folders as listed repos, one level deep, hidden folders skipped) with uncommitted changes that are not in `repos[]`.
 - **Changed tests:** files the agent marked as `test` nodes that changed in the diff, shown next to the code they claim to test.
 - **Changed but unreferenced test code:** hunks in files that hold test nodes but fall outside every test node's range (for example an edited assertion the agent didn't mention).
@@ -364,7 +364,7 @@ One static HTML page: a top bar, a side panel, four views and an inspector. Veri
 
 | View | Shows | Interaction |
 | --- | --- | --- |
-| Graph | Source-code nodes and the edges between them, laid out with ELK. When nodes reference more than one repo, they are grouped in one box per repo (dashed for `context` repos); nodes without a ref, typically endpoints, sit outside the boxes. Test nodes (kind `test`) and doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file) and unchanged nodes are hidden until their toggles are on. Edges show their kind as a label | Click a node to open it in the inspector and dim all but its neighbours. Toggle unchanged, test and doc nodes; selecting a hidden node from elsewhere turns its toggle on. Search nodes (`/`, Enter jumps to the first hit, Esc clears), switch the direction (→ or ↓), zoom and fit, fold the legend. Large graphs open centred on the first flow's entry |
+| Graph | Source-code nodes and the edges between them, laid out with ELK. When nodes reference more than one repo, they are grouped in one box per repo (dashed for `context` repos); nodes without a ref, typically endpoints, sit outside the boxes. Test nodes (kind `test`), doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file), import nodes (kind `imports`) and unchanged nodes are hidden until their toggles are on. Edges show their kind as a label | Click a node to open it in the inspector and dim all but its neighbours. Toggle unchanged, test, doc and import nodes; selecting a hidden node from elsewhere turns its toggle on. Search nodes (`/`, Enter jumps to the first hit, Esc clears), switch the direction (→ or ↓), zoom and fit, fold the legend. Large graphs open centred on the first flow's entry |
 | Flows | One lane per flow, left to right along `path`, each connector labelled and colored by the edge that joins the two steps. Tests listed in `flows[].tests` hang under the first step they have a `tests` edge to; the others are listed under the lane | Click a step, test or connector: opens it in the inspector |
 | Diff map | Every changed file with a bar of its hunks, colored by whether nodes cover them (covered, partly, not mentioned), and a coverage summary | Filter by commit, or to files that need attention or are covered; expand a file (or all) to read its hunks with their commit, the nodes covering them and the uncovered lines; open any hunk in the inspector |
 | Claims | Each claim with its status and evidence | Filter by status; expand a piece of evidence to see the resolved fact (code excerpt, hunk, commit) with the failure reason and hint |
@@ -445,8 +445,8 @@ already.
 4. Read `files`: every changed file with its hunks. Hunk `lines` are
    final-state numbers, the ones refs use, and `commits` says which state
    wrote them. Every hunk's `lines` must fall inside a node's `range` or
-   `file` ref: read the file at the final state and widen each range to the
-   whole piece it belongs to (function, component, block). A hunk without
+   `file` ref: read the file at the final state and give each hunk to its
+   node by the rules under Nodes. A hunk without
    `lines` (a deleted or emptied file) and a file without hunks (binary,
    pure rename) need the file's `ref`. A `truncated` hunk was cut short.
    Add `--lines 3` to see context around each hunk.
@@ -471,24 +471,58 @@ left out. Write no other top-level field.
 
 ## Nodes
 
-One node per meaningful piece: a function, component, handler, config block,
-migration, test case. Fields:
+Apply these rules to every changed file, in order; two reviews of the same
+change should end up with the same nodes.
+
+1. **Declarations.** One node per changed declaration: the smallest named
+   top-level function, method, component, class, constant or type that holds
+   changed lines. Its range runs from its first line (doc comment included)
+   to its last. All hunks inside it belong to that one node; a block nested
+   in it (a branch of markup, an inner callback, a hook) never gets its own.
+   A declaration the change deletes is a `deleted` node, read in the initial
+   state.
+2. **Imports.** Changed lines outside every declaration (imports,
+   re-exports, other top-level statements) go in one node per file: kind
+   `imports`, range from the first to the last such line.
+3. **Tests.** One node per changed test file, kind `test`: a `file` ref for
+   a new file, else a range from the first changed test or fixture to the
+   last. Never one node per test case.
+4. **Data.** One node per changed data or config file (JSON, YAML, locale
+   strings, SQL migration), kind `config`, range from the first to the last
+   changed line; a `file` ref for a new file.
+5. **A whole new or deleted file** of code is one node with a `file` ref
+   when it holds one declaration; otherwise rule 1 applies to it.
+6. **Unchanged nodes**, only these: the unchanged entry that starts a flow
+   (a route or screen your change is reached from), and the other side of a
+   boundary your change crosses (the real server route behind a mock you
+   changed). Endpoints, queues and external services get a node without
+   `ref`.
+
+Blank lines next to a node count as covered by it: never stretch a range
+for one.
+
+Fields:
 
 - `id`: short, unique, lowercase kebab-case (`^[a-z0-9][a-z0-9-]{0,63}$`).
-- `kind`: `entry`, `code`, `component`, `endpoint`, `test`, `external`,
-  or another short word. Use `test` for every test case.
-- `label`: what a reviewer would call it.
+- `kind`, exactly one of:
+  - `entry`: a route, screen, command or job a flow starts from;
+  - `component`: a UI component;
+  - `code`: any other function, method, class, constant or type;
+  - `imports`: rule 2;
+  - `test`: rule 3;
+  - `config`: rule 4;
+  - `endpoint`: an HTTP or RPC endpoint, queue or topic, without `ref`;
+  - `external`: a service outside the repos, without `ref`;
+  - `doc`: documentation.
+- `label`: the declaration's name, or the file name for `imports`, `test`
+  and `config` nodes.
 - `change`: `added`, `modified`, `deleted` or `unchanged`.
 - `ref`: `{ "type": "range", "repo", "file", "lines": [start, end] }`
-  covering the whole piece (1-based, inclusive, lines at `commits[0]`;
-  at the state before the first commit for `deleted`). Use `{ "type": "file", ... }` for whole new or deleted files.
+  (1-based, inclusive, lines at `commits[0]`; at the state before the first
+  commit for `deleted`), or `{ "type": "file", ... }` where a rule says so.
 - `why`: one sentence, the reason for the change. Required when changed.
 - `meta`: for tests, `{ "command": "<what you ran>", "observed": "passed" | "failed" | "not run" }`.
   Only write a result you saw in this session's output.
-
-Include `unchanged` nodes only when they explain a flow or a boundary,
-for example the real server route behind a mock you changed.
-Endpoints, queues and external services get a node without `ref`.
 
 ## Languages
 
@@ -500,9 +534,20 @@ a file the globs can't describe, add `"language"` on its ref. Valid names:
 
 ## Edges
 
-`{ "from", "to", "kind", "ref" }` with `kind` one of `calls`, `renders`,
-`requests`, `serves`, `mocks`, `tests`, `depends`, or another short verb.
-Add a `site` ref pointing at the line where the relation happens:
+`{ "from", "to", "kind", "ref" }`, `kind` exactly one of:
+
+- `calls`: `from` calls a function or method of `to`;
+- `renders`: `from` renders the component `to`;
+- `requests`: `from` sends a request to the endpoint `to`;
+- `serves`: `from` handles the endpoint `to`;
+- `mocks`: `from` stands in for `to` in tests or a mock server;
+- `uses`: `from` reads a constant, type, string or config value from `to`;
+- `tests`: `from` is a test node that exercises `to`.
+
+Add exactly one edge for each ordered pair of nodes where the `from` node's
+lines call, render, request, serve, mock or use the `to` node; none for
+anything else. Its `site` ref points at the first such line inside the
+`from` node:
 
 ~~~json
 { "type": "site", "repo": "web", "file": "src/orders/OrderPage.tsx",
@@ -510,16 +555,20 @@ Add a `site` ref pointing at the line where the relation happens:
 ~~~
 
 `contains` is a short exact substring of that line. If you can't point at a
-line, omit `ref`; never guess. Give each test node a `tests` edge to every
-node it exercises. A node with no `tests` edge has no test; the reviewer sees
-that, so write no notes explaining it.
+line, omit `ref`; never guess. A test node gets a `tests` edge to each node
+its tests call or render directly; an end-to-end test that drives the app
+instead gets one to the entry of each flow it drives. A node with no `tests`
+edge has no test; the reviewer sees that, so write no notes explaining it.
 
 ## Flows
 
-One flow per user-visible or caller-visible path your change affects:
-`{ "id", "title", "path": [...], "tests": [...] }`. `title` says the path
-in a reader's words; `path` lists node ids from the entry point through the
-changed code to the boundary; `tests` lists the test nodes that exercise it.
+One flow per entry your change affects. An entry is a screen or route, a
+user action (a button, a shortcut), a command, an endpoint or a job; two
+actions that run the same handler are one flow.
+`{ "id", "title", "path": [...], "tests": [...] }`: `title` names the entry
+and what happens, in a reader's words; `path` lists node ids from the entry
+along edges through the changed code to the boundary; `tests` lists the
+test nodes that exercise it.
 
 ## Claims and notes
 

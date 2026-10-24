@@ -45,8 +45,8 @@ already.
 4. Read `files`: every changed file with its hunks. Hunk `lines` are
    final-state numbers, the ones refs use, and `commits` says which state
    wrote them. Every hunk's `lines` must fall inside a node's `range` or
-   `file` ref: read the file at the final state and widen each range to the
-   whole piece it belongs to (function, component, block). A hunk without
+   `file` ref: read the file at the final state and give each hunk to its
+   node by the rules under Nodes. A hunk without
    `lines` (a deleted or emptied file) and a file without hunks (binary,
    pure rename) need the file's `ref`. A `truncated` hunk was cut short.
    Add `--lines 3` to see context around each hunk.
@@ -71,24 +71,58 @@ left out. Write no other top-level field.
 
 ## Nodes
 
-One node per meaningful piece: a function, component, handler, config block,
-migration, test case. Fields:
+Apply these rules to every changed file, in order; two reviews of the same
+change should end up with the same nodes.
+
+1. **Declarations.** One node per changed declaration: the smallest named
+   top-level function, method, component, class, constant or type that holds
+   changed lines. Its range runs from its first line (doc comment included)
+   to its last. All hunks inside it belong to that one node; a block nested
+   in it (a branch of markup, an inner callback, a hook) never gets its own.
+   A declaration the change deletes is a `deleted` node, read in the initial
+   state.
+2. **Imports.** Changed lines outside every declaration (imports,
+   re-exports, other top-level statements) go in one node per file: kind
+   `imports`, range from the first to the last such line.
+3. **Tests.** One node per changed test file, kind `test`: a `file` ref for
+   a new file, else a range from the first changed test or fixture to the
+   last. Never one node per test case.
+4. **Data.** One node per changed data or config file (JSON, YAML, locale
+   strings, SQL migration), kind `config`, range from the first to the last
+   changed line; a `file` ref for a new file.
+5. **A whole new or deleted file** of code is one node with a `file` ref
+   when it holds one declaration; otherwise rule 1 applies to it.
+6. **Unchanged nodes**, only these: the unchanged entry that starts a flow
+   (a route or screen your change is reached from), and the other side of a
+   boundary your change crosses (the real server route behind a mock you
+   changed). Endpoints, queues and external services get a node without
+   `ref`.
+
+Blank lines next to a node count as covered by it: never stretch a range
+for one.
+
+Fields:
 
 - `id`: short, unique, lowercase kebab-case (`^[a-z0-9][a-z0-9-]{0,63}$`).
-- `kind`: `entry`, `code`, `component`, `endpoint`, `test`, `external`,
-  or another short word. Use `test` for every test case.
-- `label`: what a reviewer would call it.
+- `kind`, exactly one of:
+  - `entry`: a route, screen, command or job a flow starts from;
+  - `component`: a UI component;
+  - `code`: any other function, method, class, constant or type;
+  - `imports`: rule 2;
+  - `test`: rule 3;
+  - `config`: rule 4;
+  - `endpoint`: an HTTP or RPC endpoint, queue or topic, without `ref`;
+  - `external`: a service outside the repos, without `ref`;
+  - `doc`: documentation.
+- `label`: the declaration's name, or the file name for `imports`, `test`
+  and `config` nodes.
 - `change`: `added`, `modified`, `deleted` or `unchanged`.
 - `ref`: `{ "type": "range", "repo", "file", "lines": [start, end] }`
-  covering the whole piece (1-based, inclusive, lines at `commits[0]`;
-  at the state before the first commit for `deleted`). Use `{ "type": "file", ... }` for whole new or deleted files.
+  (1-based, inclusive, lines at `commits[0]`; at the state before the first
+  commit for `deleted`), or `{ "type": "file", ... }` where a rule says so.
 - `why`: one sentence, the reason for the change. Required when changed.
 - `meta`: for tests, `{ "command": "<what you ran>", "observed": "passed" | "failed" | "not run" }`.
   Only write a result you saw in this session's output.
-
-Include `unchanged` nodes only when they explain a flow or a boundary,
-for example the real server route behind a mock you changed.
-Endpoints, queues and external services get a node without `ref`.
 
 ## Languages
 
@@ -100,9 +134,20 @@ a file the globs can't describe, add `"language"` on its ref. Valid names:
 
 ## Edges
 
-`{ "from", "to", "kind", "ref" }` with `kind` one of `calls`, `renders`,
-`requests`, `serves`, `mocks`, `tests`, `depends`, or another short verb.
-Add a `site` ref pointing at the line where the relation happens:
+`{ "from", "to", "kind", "ref" }`, `kind` exactly one of:
+
+- `calls`: `from` calls a function or method of `to`;
+- `renders`: `from` renders the component `to`;
+- `requests`: `from` sends a request to the endpoint `to`;
+- `serves`: `from` handles the endpoint `to`;
+- `mocks`: `from` stands in for `to` in tests or a mock server;
+- `uses`: `from` reads a constant, type, string or config value from `to`;
+- `tests`: `from` is a test node that exercises `to`.
+
+Add exactly one edge for each ordered pair of nodes where the `from` node's
+lines call, render, request, serve, mock or use the `to` node; none for
+anything else. Its `site` ref points at the first such line inside the
+`from` node:
 
 ```json
 { "type": "site", "repo": "web", "file": "src/orders/OrderPage.tsx",
@@ -110,16 +155,20 @@ Add a `site` ref pointing at the line where the relation happens:
 ```
 
 `contains` is a short exact substring of that line. If you can't point at a
-line, omit `ref`; never guess. Give each test node a `tests` edge to every
-node it exercises. A node with no `tests` edge has no test; the reviewer sees
-that, so write no notes explaining it.
+line, omit `ref`; never guess. A test node gets a `tests` edge to each node
+its tests call or render directly; an end-to-end test that drives the app
+instead gets one to the entry of each flow it drives. A node with no `tests`
+edge has no test; the reviewer sees that, so write no notes explaining it.
 
 ## Flows
 
-One flow per user-visible or caller-visible path your change affects:
-`{ "id", "title", "path": [...], "tests": [...] }`. `title` says the path
-in a reader's words; `path` lists node ids from the entry point through the
-changed code to the boundary; `tests` lists the test nodes that exercise it.
+One flow per entry your change affects. An entry is a screen or route, a
+user action (a button, a shortcut), a command, an endpoint or a job; two
+actions that run the same handler are one flow.
+`{ "id", "title", "path": [...], "tests": [...] }`: `title` names the entry
+and what happens, in a reader's words; `path` lists node ids from the entry
+along edges through the changed code to the boundary; `tests` lists the
+test nodes that exercise it.
 
 ## Claims and notes
 
