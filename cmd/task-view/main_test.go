@@ -363,6 +363,47 @@ func TestSiblingsNotScannedByDefault(t *testing.T) {
 	}
 }
 
+// Git reports repo roots with symlinks resolved, so a review file reached
+// through a symlink (macOS temp dirs, a linked checkout) must still have its
+// .review/ folder left out of the diff.
+func TestReviewPathThroughSymlink(t *testing.T) {
+	set := fixture.Build(t)
+	path := writeReviewFile(t, set, marshalReview(t, set.Review()))
+
+	// The fixture hides .review/ from Git; show it, so only task-view's own
+	// exclusion keeps it out.
+	if err := os.WriteFile(filepath.Join(set.Web, ".git", "info", "exclude"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(set.Root, link); err != nil {
+		t.Fatal(err)
+	}
+
+	relPath, err := filepath.Rel(set.Root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exit := run([]string{"validate", filepath.Join(link, relPath), "--format", "json"}, &stdout, &stderr)
+	if exit != review.ExitOK {
+		t.Fatalf("exit %d, want 0:\n%s%s", exit, stdout.String(), stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("bad JSON output: %v\n%s", err, stdout.String())
+	}
+
+	warnings := countCodes(out.Warnings)
+	reviewFolderCounted := warnings["unmentioned_hunk"] > 0 || warnings["uncommitted_changes"] > 0
+	if reviewFolderCounted {
+		t.Fatalf("the review folder counted as part of the change:\n%s", stdout.String())
+	}
+}
+
 func TestGitNotFound(t *testing.T) {
 	set := fixture.Build(t)
 	path := writeReviewFile(t, set, marshalReview(t, set.Review()))

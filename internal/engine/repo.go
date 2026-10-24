@@ -286,7 +286,9 @@ func (e *Engine) resolveRepos() []review.Finding {
 			continue
 		}
 
-		relPath, err := filepath.Rel(repoPath, e.ReviewPath)
+		// Git reports roots with symlinks resolved; compare resolved paths
+		// so a review reached through a symlink still counts as inside.
+		relPath, err := filepath.Rel(resolvedPath(repoPath), resolvedPath(e.ReviewPath))
 		reviewInsideRepo := err == nil && !strings.HasPrefix(relPath, "..")
 		if reviewInsideRepo {
 			repoState.reviewRel = filepath.ToSlash(relPath)
@@ -294,6 +296,17 @@ func (e *Engine) resolveRepos() []review.Finding {
 	}
 
 	return findings
+}
+
+// resolvedPath is filePath with symlinks resolved, or filePath itself when it
+// cannot be resolved.
+func resolvedPath(filePath string) string {
+	resolved, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		return filePath
+	}
+
+	return resolved
 }
 
 // repoFinding is a finding about a repo as a whole.
