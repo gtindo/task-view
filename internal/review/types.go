@@ -36,6 +36,9 @@ const (
 
 // Review is the whole review file.
 type Review struct {
+	// Schema is the optional `$schema` URL editors use to check the file.
+	// The JSON Schema allows it, so the strict decoder must know it too.
+	Schema  string   `json:"$schema,omitempty"`
 	Version int      `json:"version"`
 	Summary string   `json:"summary"`
 	Repos   []*Repo  `json:"repos"`

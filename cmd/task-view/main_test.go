@@ -394,6 +394,18 @@ func TestBlankLinesBelongToTheirNode(t *testing.T) {
 	}
 }
 
+// A `$schema` key is allowed by the JSON Schema, so validate accepts it.
+func TestSchemaKeyAccepted(t *testing.T) {
+	set := fixture.Build(t)
+	data := marshalReview(t, set.Review())
+	withSchema := bytes.Replace(data, []byte("{"), []byte(`{"$schema": "https://json-schema.org/draft/2020-12/schema",`), 1)
+
+	res := validateRaw(t, set, withSchema)
+	if res.exit != review.ExitOK {
+		t.Fatalf("exit %d, want 0:\n%s", res.exit, res.raw)
+	}
+}
+
 func TestSiblingsNotScannedByDefault(t *testing.T) {
 	set := fixture.Build(t)
 
