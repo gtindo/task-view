@@ -1,4 +1,4 @@
-.PHONY: build install test vet lint check golden docs demo release clean
+.PHONY: build install test vet lint check golden docs demo release clean bench-prepare bench bench-report bench-publish
 
 VERSION ?= 0.1.0
 ESLINT := npx --yes eslint@10.12.0
@@ -13,9 +13,11 @@ install:
 
 test:
 	go test ./...
+	cd bench && go test ./...
 
 vet:
 	go vet ./...
+	cd bench && go vet ./...
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
 # Code rules from AGENTS.md: golangci-lint for Go, core ESLint rules for app.js.
@@ -63,6 +65,26 @@ release: docs
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-darwin-amd64 ./cmd/task-view
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o release/task-view-darwin-arm64 ./cmd/task-view
 	cd release && shasum -a 256 task-view-* > SHA256SUMS
+
+# The benchmark in bench/ (its own Go module; see bench/README.md). It calls
+# models and costs money, so it is never part of check. BENCH_ARGS passes run
+# flags, e.g. make bench BENCH_ARGS="-cases httpx-* -models haiku -repeats 1".
+bench-prepare:
+	cd bench && go run ./cmd/bench prepare
+
+bench:
+	cd bench && go run ./cmd/bench run $(BENCH_ARGS)
+
+bench-report:
+	cd bench && go run ./cmd/bench report $(or $(BENCH_OUT),.cache/results/latest)
+
+# Replaces bench/results/ and BENCH.md with the run in BENCH_OUT: the repo
+# keeps only the latest published run. BENCH_DASHBOARD is the shared page
+# that draws the results as charts; update its data when a new run lands.
+BENCH_DASHBOARD ?= https://claude.ai/artifact/J5NQkrcbKVjaX6gSLDGs9g
+
+bench-publish:
+	cd bench && go run ./cmd/bench publish -dashboard "$(BENCH_DASHBOARD)" $(or $(BENCH_OUT),.cache/results/latest)
 
 clean:
 	rm -rf bin dist release site

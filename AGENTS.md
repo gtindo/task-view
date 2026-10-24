@@ -33,6 +33,8 @@ behaviour. `README.md` describes layout and commands.
 | `make demo` | Live demo pages in `site/` from the reviews in `demo/`; a push to `main` runs it in CI and publishes GitHub Pages |
 | `make release` | Cross-compiled binaries, guides from `docs/`, the agent skill and checksums in `release/`; a pushed `v*` tag runs it in CI and publishes a GitHub release |
 | `make clean` | Removes build, release and demo output |
+| `make bench-prepare`, `make bench`, `make bench-report` | The benchmark in `bench/` (`bench/README.md`); calls models, so never part of `check` |
+| `make bench-publish` | Replaces `BENCH.md` and `bench/results/` with the latest run's results and its archived reviews and pages |
 
 ## Package boundaries (enforced by depguard)
 
@@ -41,6 +43,10 @@ behaviour. `README.md` describes layout and commands.
 `gitx`, `langs`; `fixture` is for tests only; `cmd/task-view` wires
 everything. Only `gitx` runs Git: `os/exec` is allowed in `gitx`, `fixture`
 and `cmd/task-view` (to open the browser) and nowhere else.
+
+`bench/` is a separate Go module, outside these boundaries and the lint
+config: it clones projects and runs harness adapters, so it uses `os/exec`
+freely. `make vet` and `make test` cover it; keep it on the standard library.
 
 ## Code rules
 

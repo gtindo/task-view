@@ -1,0 +1,146 @@
+{
+  "projects": [
+    {
+      "id": "httpx",
+      "repo": "https://github.com/encode/httpx.git",
+      "language": "Python",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "id": "hono",
+      "repo": "https://github.com/honojs/hono.git",
+      "language": "TypeScript",
+      "license": "MIT"
+    },
+    {
+      "id": "axum",
+      "repo": "https://github.com/tokio-rs/axum.git",
+      "language": "Rust",
+      "license": "MIT"
+    },
+    {
+      "id": "flowmap",
+      "repo": "https://github.com/gtindo/flowmap.git",
+      "language": "Go",
+      "license": "MIT"
+    }
+  ],
+  "cases": [
+    {
+      "id": "httpx-small",
+      "project": "httpx",
+      "size": "small",
+      "title": "iter_text no longer yields a stray empty string",
+      "source": "https://github.com/encode/httpx/pull/2998",
+      "base": "90538a3b4610ba49ce16c997bcfdb9101f9503be",
+      "commits": ["1e110964736a95d822144390b99d7ecf17fca527"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "httpx-medium",
+      "project": "httpx",
+      "size": "medium",
+      "title": "Deprecate app= in favour of explicit WSGI and ASGI transports",
+      "source": "https://github.com/encode/httpx/pull/3050",
+      "base": "6f461522a5c58839c31be3c82b7bd47fba77109b",
+      "commits": ["cabd1c095e52e2f67ab63ec17941d3a539d7c877"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "httpx-big",
+      "project": "httpx",
+      "size": "big",
+      "title": "New SSLContext API; remove deprecated proxies=, app= and URL.raw",
+      "source": "https://github.com/encode/httpx/pull/3319",
+      "base": "3f76571d3429497c4ee4ecf5d8bc034b6f765957",
+      "commits": ["8e36f2bc685dfbe43cd7503bc1c422a6ed6e05a5"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "hono-small",
+      "project": "hono",
+      "size": "small",
+      "title": "CORS preflight appends Origin to Vary instead of overwriting it",
+      "source": "https://github.com/honojs/hono/pull/5235",
+      "base": "546eca0c402a031aaeb4a3b422c5d9cb87fe1576",
+      "commits": ["8bf03c377a39226b3dbcbcadf3b342532e1dd0a8"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "hono-medium",
+      "project": "hono",
+      "size": "medium",
+      "title": "RegExpRouter links wildcard middleware to suffix and parameter routes",
+      "source": "https://github.com/honojs/hono/pull/5266",
+      "base": "48e360fcaa107c7706fcf8adccb93505876791dc",
+      "commits": ["a10592f3e1864cbe277619633db953450a6b1e4b"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "hono-big",
+      "project": "hono",
+      "size": "big",
+      "title": "Close XSS holes in server-side JSX escaping",
+      "source": "https://github.com/honojs/hono/security/advisories/GHSA-hxh3-vqpv-xpqv",
+      "base": "cac0c4d3fe29aca4e426031067cbbb3b9131e30c",
+      "commits": ["2b8ed402cdab6dfc5e829b480806dcd8db94161e"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "axum-small",
+      "project": "axum",
+      "size": "small",
+      "title": "Merged Allow headers no longer repeat HEAD",
+      "source": "https://github.com/tokio-rs/axum/pull/3836",
+      "base": "98aea470f9190fad1915897166ac0f149522011a",
+      "commits": ["b7e37889932edcf521ca54e5ed30245f01180994"],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "axum-medium",
+      "project": "axum",
+      "size": "medium",
+      "title": "Remove extra router state clones, with clone-counting test helpers",
+      "source": "https://github.com/tokio-rs/axum/pull/2970",
+      "base": "19b99ea9178af57d14faf024a2bc59a6467f56e1",
+      "commits": [
+        "9feb526c036a62647fa61e964319b1f84b9cf430",
+        "11fe5c737cb95d8b79cce528c02c95cdaf40d6c2",
+        "b363354eaac02fe4770dc8d750ea0897a97190b5"
+      ],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "axum-big",
+      "project": "axum",
+      "size": "big",
+      "title": "WebSockets over HTTP/2, MethodFilter::CONNECT and a Content-Length fix",
+      "source": "https://github.com/tokio-rs/axum/pull/2894",
+      "base": "d783a8b17e8647a48e3a9952da9bad76d29aa97b",
+      "commits": [
+        "5512b5b91fe12fb58bb91914186208c7a4f29c2a",
+        "822db3b1af766b7372541e7a490ab21a8e748e10",
+        "4b4dac4d868bd7b21e8ac9b2d6d64d2072cf6ed4",
+        "64e6edac0566baa727d96d220083600e18a7e9ff"
+      ],
+      "uncommitted_tip": true
+    },
+    {
+      "id": "flowmap-big",
+      "project": "flowmap",
+      "size": "agent-scale",
+      "title": "Engine protocol: wire contract, engine session, stdio command and workbench adapter",
+      "source": "https://github.com/gtindo/flowmap/blob/main/docs/tdd/0001-flowmap-engine-protocol.md",
+      "base": "48036ed4fd895df8480edf725ae3329dd7ac41da",
+      "commits": [
+        "d755d2ea0924e3a4ae4945f1de717e1f51e71581",
+        "ac2019c6cf8482a049ab4e6c901e880f93bf3bd8",
+        "e6bbd5583f01a2eba26a99850e6ebd1dd1fb7745",
+        "6f2c1b988bc2d71bb041f92612e018b1cae20618",
+        "85500f2536c7439fd5190914fd399a9350c10839",
+        "71004065fc03da8d98ec1857b33fd281d58ce6e1"
+      ],
+      "uncommitted_tip": true
+    }
+  ]
+}

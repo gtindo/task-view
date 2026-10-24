@@ -295,7 +295,10 @@ make build   # bin/task-view
 make check   # vet, lint (golangci-lint, ESLint via npx) and test
 ```
 
-Code rules and package boundaries are in [AGENTS.md](AGENTS.md).
+Code rules and package boundaries are in [AGENTS.md](AGENTS.md). The
+benchmark that measures what a review costs by change size and model lives in
+[bench/](bench/README.md); the latest results, with every review and page it
+produced, are in [BENCH.md](BENCH.md).
 
 Layout: `cmd/task-view` (CLI), `internal/review` (model, embedded JSON
 Schema, structural rules), `internal/engine` (Git states, diff, reference and

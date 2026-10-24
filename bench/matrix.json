@@ -1,0 +1,13 @@
+{
+  "harness": "harness/claude-code",
+  "models": [
+    { "id": "haiku", "label": "Haiku 5.5", "price": "claude-haiku-5-5" },
+    { "id": "sonnet", "label": "Sonnet 5.5", "price": "claude-sonnet-5-5" },
+    { "id": "opus", "label": "Opus 5.5", "price": "claude-opus-5-5" }
+  ],
+  "efforts": ["medium", "high"],
+  "repeats": 3,
+  "parallel": 4,
+  "cases": ["*"],
+  "timeout": "20m"
+}

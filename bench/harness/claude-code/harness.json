@@ -1,0 +1,7 @@
+{
+  "name": "claude-code",
+  "command": "run.sh",
+  "usage_format": "claude-code",
+  "usage_file": "claude.json",
+  "version_command": "claude --version"
+}

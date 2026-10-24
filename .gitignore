@@ -5,3 +5,4 @@ dist/
 .claude/launch.json
 release/
 site/
+bench/.cache/
