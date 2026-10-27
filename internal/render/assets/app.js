@@ -271,8 +271,14 @@
     // Flows read the change in order; a review without flows opens on its graph.
     view: reviewData.flows.length ? "flows" : "graph",
     selection: null, // {type: node|edge|hunk|findings|file, id}
+    // What the Flows view picked; the graph shows only it and what the reviewer opens around it.
+    focus: null, // {type: node|edge|flow, id}
+    // Nodes opened with +N, and nodes shown because they were selected outside the graph's scope.
+    expanded: new Set(),
+    revealed: new Set(),
     showUnchanged: true,
-    showTests: false,
+    // Flows hold no tests, so a scoped graph brings in the tests of what it shows.
+    showTests: reviewData.flows.length > 0,
     showImports: false,
     hideReviewed: false,
     // Reviewed flows opened again for this page only; they stay reviewed.
@@ -308,19 +314,24 @@
 
     if (VIEWS.some((candidate) => candidate.id === view && isViewShown(candidate))) state.view = view;
 
-    const selection = params.get("sel");
+    state.focus = typedId(params.get("focus"));
+    state.selection = typedId(params.get("sel"));
+  }
 
-    if (!selection) return;
+  // "node:fn-a" as {type: "node", id: "fn-a"}, or null.
+  function typedId(text) {
+    if (!text) return null;
 
-    const colon = selection.indexOf(":");
+    const colon = text.indexOf(":");
 
-    state.selection = { type: selection.slice(0, colon), id: selection.slice(colon + 1) };
+    return { type: text.slice(0, colon), id: text.slice(colon + 1) };
   }
 
   function writeHash() {
     const params = new URLSearchParams();
 
     params.set("view", state.view);
+    if (state.focus) params.set("focus", `${state.focus.type}:${state.focus.id}`);
     if (state.selection && state.selection.type !== "findings") params.set("sel", `${state.selection.type}:${state.selection.id}`);
     history.replaceState(null, "", "#" + params.toString());
   }
@@ -899,6 +910,8 @@
 
     if (isNewNode) state.inspectorTab = "code";
     state.selection = selection;
+    // Flows picks what the graph shows; selecting inside the graph only changes the inspector.
+    if (state.view === "flows" && isGraphSelection(selection)) setFocus(selection);
     renderInspector();
     if (state.view === "graph" && revealInGraph(selection)) {
       syncFilterToggles();
@@ -906,6 +919,16 @@
     } else {
       highlightSelection();
     }
+    writeHash();
+  }
+
+  // Scopes the graph to a step, an edge or a flow; null leaves nothing to show.
+  function setFocus(focus) {
+    state.focus = focus;
+    state.expanded = new Set();
+    state.revealed = new Set();
+    if (state.view === "graph") renderView();
+    else highlightSelection();
     writeHash();
   }
 
@@ -1112,9 +1135,8 @@
 
   const nonCodeNodes = () => reviewData.nodes.filter(isNonCode);
 
-  function inGraph(node) {
-    if (isNonCode(node)) return false;
-
+  // The Unchanged, Tests and Imports switches.
+  function passesToggles(node) {
     const group = nodeGroup(node);
     const changeShown = state.showUnchanged || node.change !== "unchanged";
     const toggleKey = GROUP_TOGGLES[group];
@@ -1123,19 +1145,79 @@
     return changeShown && groupShown;
   }
 
-  // Turns on whichever filters hide the selection; true when one changed.
+  // A review with flows scopes its graph to what Flows picked; without flows
+  // nothing could pick, so the whole graph shows.
+  const isScoped = () => reviewData.flows.length > 0;
+
+  // The nodes a focus stands for: a step, an edge's two ends or a whole flow.
+  function focusNodeIds(focus) {
+    if (!focus) return [];
+    if (focus.type === "node") return [focus.id];
+    if (focus.type === "edge") {
+      const edge = edgeById.get(focus.id);
+
+      return edge ? [edge.from, edge.to] : [];
+    }
+
+    const flow = reviewData.flows.find((candidate) => candidate.id === focus.id);
+
+    return flow ? flow.path : [];
+  }
+
+  // Nodes one edge away, either direction; docs and config never join the graph.
+  const graphNeighbours = (id) => [...outgoingEdges(id).map((edge) => edge.to), ...incomingEdges(id).map((edge) => edge.from)]
+    .filter((other) => nodeById.has(other) && !isNonCode(nodeById.get(other)));
+
+  // The base nodes plus, ring after ring, what every visible node brings
+  // along (attachedOf: its tests) and the neighbours of every visible
+  // expanded node. An expanded node counts only while visible, so closing a
+  // node also drops what the nodes it opened had opened.
+  function scopedNodeIds(baseIds, expanded, neighboursOf, attachedOf, isShown) {
+    const visible = new Set(baseIds);
+    const nextRing = () => [...visible]
+      .flatMap((id) => [...attachedOf(id), ...(expanded.has(id) ? neighboursOf(id) : [])])
+      .filter((id) => !visible.has(id) && isShown(id));
+
+    for (let ring = nextRing(); ring.length; ring = nextRing()) {
+      ring.forEach((id) => visible.add(id));
+    }
+
+    return visible;
+  }
+
+  // The ids of the nodes the graph shows.
+  function graphNodeIds() {
+    const isCode = (id) => nodeById.has(id) && !isNonCode(nodeById.get(id));
+
+    if (!isScoped()) return new Set(reviewData.nodes.filter((node) => !isNonCode(node) && passesToggles(node)).map((node) => node.id));
+
+    const baseIds = [...focusNodeIds(state.focus), ...state.revealed].filter(isCode);
+
+    const testIds = (id) => testsOf(id).map((edge) => edge.from);
+
+    return scopedNodeIds(baseIds, state.expanded, graphNeighbours, testIds, (id) => passesToggles(nodeById.get(id)));
+  }
+
+  // Brings a selection the graph does not show into it: added to the scope,
+  // or, in a whole graph, by turning its filters on. True when one changed.
   function revealInGraph(selection) {
     if (!isGraphSelection(selection)) return false;
 
     const edge = selection.type === "edge" ? edgeById.get(selection.id) : null;
+    const shownIds = graphNodeIds();
     const hidden = (edge ? [edge.from, edge.to] : [selection.id])
       .map((id) => nodeById.get(id))
       .filter(Boolean)
-      .filter((node) => !isNonCode(node) && !inGraph(node));
+      .filter((node) => !isNonCode(node) && !shownIds.has(node.id));
 
     hidden.forEach((node) => {
       const group = nodeGroup(node);
 
+      if (isScoped()) {
+        state.revealed.add(node.id);
+
+        return;
+      }
       if (node.change === "unchanged") state.showUnchanged = true;
       if (GROUP_TOGGLES[group]) state[GROUP_TOGGLES[group]] = true;
     });
@@ -1144,7 +1226,8 @@
   }
 
   function graphElements() {
-    const visible = reviewData.nodes.filter(inGraph);
+    const shownIds = graphNodeIds();
+    const visible = reviewData.nodes.filter((node) => shownIds.has(node.id));
     const visibleIds = new Set(visible.map((node) => node.id));
     // One repo: the header already names it, so skip the box.
     const listedRepos = new Set(reviewData.nodes.filter((node) => node.ref && repoById.get(node.ref.repo)).map((node) => node.ref.repo));
@@ -1255,6 +1338,14 @@
     // A review without tests or imports gets no switch for them. Native append
     // would print a skipped switch as the text "null", so drop it first.
     const toolbarItems = [
+      ...(isScoped() ? [focusChip(), el("button", {
+        class: "link",
+        title: "Close every node you opened",
+        onclick: () => {
+          state.expanded = new Set();
+          refreshGraph();
+        },
+      }, "Collapse all"), el("span", { class: "tb-sep" })] : []),
       search,
       el("span", { class: "tb-sep" }),
       toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
@@ -1265,6 +1356,27 @@
     ];
 
     toolbarEl.append(...toolbarItems.filter(Boolean));
+  }
+
+  const FOCUS_ICON = { node: "target", edge: "arrow", flow: "flows" };
+
+  function focusLabel(focus) {
+    if (focus.type === "node") return nodeById.get(focus.id)?.label || focus.id;
+    if (focus.type === "edge") {
+      const edge = edgeById.get(focus.id);
+
+      return edge ? `${nodeById.get(edge.from).label} → ${nodeById.get(edge.to).label}` : focus.id;
+    }
+
+    return reviewData.flows.find((flow) => flow.id === focus.id)?.title || focus.id;
+  }
+
+  // What Flows picked, with × to clear it.
+  function focusChip() {
+    return el("span", { class: "focus-chip", title: "Picked in Flows: the graph grows from it" },
+      el("span", { html: icon(FOCUS_ICON[state.focus.type], "sm") }),
+      el("span", { class: "fl" }, focusLabel(state.focus)),
+      el("button", { class: "icon-btn", title: "Clear: pick again in Flows", html: icon("close", "sm"), onclick: () => setFocus(null) }));
   }
 
   function graphControls() {
@@ -1304,8 +1416,9 @@
 
   const readClass = (node) => (isNodeRead(node.id) ? " read" : "");
 
-  // The HTML drawn over a graph node: a node card, or the name tag of a repo box.
-  function overlayLabel(graphNode) {
+  // The HTML drawn over a graph node: a node card, or the name tag of a repo
+  // box. shownIds are the nodes on the graph, for the card's +N count.
+  function overlayLabel(graphNode, shownIds) {
     if (graphNode.hasClass("repo")) return repoTag(repoById.get(graphNode.data("repo")));
 
     const node = nodeById.get(graphNode.id());
@@ -1313,7 +1426,26 @@
     return el("div", {
       class: `gn ${node.change} ${node.result.status}${readClass(node)}`,
       style: { width: graphNode.data("w") + "px", height: graphNode.data("h") + "px" },
-    }, nodeCardBody(node, ""));
+    }, nodeCardBody(node, ""), isScoped() ? hopButton(node, shownIds) : null);
+  }
+
+  // +N opens a node's hidden neighbours; − closes what it opened.
+  function hopButton(node, shownIds) {
+    const isExpanded = state.expanded.has(node.id);
+    const hiddenCount = new Set(graphNeighbours(node.id).filter((id) => !shownIds.has(id) && passesToggles(nodeById.get(id)))).size;
+
+    if (!isExpanded && !hiddenCount) return null;
+
+    return el("button", {
+      class: "hop" + (isExpanded ? " open" : ""),
+      title: isExpanded ? "Hide the neighbours this node opened" : `Show ${plural(hiddenCount, "hidden neighbour")}`,
+      onclick: (event) => {
+        event.stopPropagation();
+        if (isExpanded) state.expanded.delete(node.id);
+        else state.expanded.add(node.id);
+        refreshGraph();
+      },
+    }, isExpanded ? "−" : `+${hiddenCount}`);
   }
 
   const REPO_TAG_OFFSET = { x: 14, y: 7 };
@@ -1400,7 +1532,9 @@
 
     if (leafNodes.empty()) return;
 
-    const entry = reviewData.flows.length ? graph.getElementById(reviewData.flows[0].path[0]) : graph.collection();
+    // A scoped graph opens on what Flows picked, a whole one on the first flow's entry.
+    const anchorId = focusNodeIds(state.focus)[0] || reviewData.flows[0]?.path[0];
+    const entry = anchorId ? graph.getElementById(anchorId) : graph.collection();
     const anchorNode = entry.length ? entry : leafNodes.first();
     const box = graph.elements().boundingBoxAt(positionOf);
     const camera = settledCamera(box, positionOf(anchorNode), graph.width(), graph.height());
@@ -1467,15 +1601,19 @@
     graph.stop(true);
     graph.elements().stop(true);
     hideTooltip();
-    removeOverlayLabels(leaving.nodes());
+    removeOverlayLabels(graph.nodes());
     graph.remove(leaving);
-    addOverlayLabels(graph.add(entering).nodes());
+    graph.add(entering);
+    // The +N counts change on nodes that stay, so every card is redrawn.
+    addOverlayLabels(graph.nodes());
     runGraphLayout(!reducedMotion.matches);
   }
 
   function addOverlayLabels(graphNodes) {
+    const shownIds = new Set(graph.nodes().map((graphNode) => graphNode.id()));
+
     graphNodes.forEach((graphNode) => {
-      const label = overlayLabel(graphNode);
+      const label = overlayLabel(graphNode, shownIds);
 
       // Hidden from the start so an entering card never flashes before its first sync.
       label.classList.toggle("entering", graphNode.hasClass("entering"));
@@ -1499,6 +1637,16 @@
   }
 
   function graphView() {
+    if (isScoped() && !state.focus) {
+      viewEl.appendChild(el("div", { class: "empty" },
+        el("div", null,
+          htmlFragment(icon("graph")),
+          el("div", null, "Pick a step, an edge or a flow title in Flows to see it here."),
+          el("button", { class: "link", onclick: () => setView("flows") }, "Go to Flows →"))));
+
+      return;
+    }
+
     graphToolbar();
 
     if (typeof cytoscape === "undefined") {
@@ -1678,10 +1826,16 @@
       requestOverlaySync();
     }
 
+    // Flows marks what it picked for the graph, whatever the graph selected since.
+    const focus = state.focus;
+    const isFocused = (type, id) => Boolean(focus && focus.type === type && focus.id === id);
     const selection = state.selection;
     const isNodeSelection = selection && selection.type === "node";
 
-    document.querySelectorAll(".ncard, .orow").forEach((card) => card.classList.toggle("sel", Boolean(isNodeSelection && card.dataset.node === selection.id)));
+    document.querySelectorAll(".ncard").forEach((card) => card.classList.toggle("sel", isFocused("node", card.dataset.node)));
+    document.querySelectorAll(".ek[data-edge]").forEach((label) => label.classList.toggle("sel", isFocused("edge", label.dataset.edge)));
+    document.querySelectorAll(".flow[data-flow]").forEach((card) => card.classList.toggle("focused", isFocused("flow", card.dataset.flow)));
+    document.querySelectorAll(".orow").forEach((row) => row.classList.toggle("sel", Boolean(isNodeSelection && row.dataset.node === selection.id)));
   }
 
   function legend() {
@@ -1838,7 +1992,7 @@
     const readCount = flow.path.filter(isNodeRead).length;
     const isReviewed = isFlowReviewed(flow);
     const isOpen = !isReviewed || state.openFlows.has(flow.id);
-    const card = el("section", { class: "flow" + (isReviewed ? " reviewed" : "") + (isOpen ? "" : " folded") });
+    const card = el("section", { class: "flow" + (isReviewed ? " reviewed" : "") + (isOpen ? "" : " folded"), "data-flow": flow.id });
     const toggleOpenFlow = () => {
       if (isOpen) state.openFlows.delete(flow.id);
       else state.openFlows.add(flow.id);
@@ -1849,7 +2003,11 @@
       isReviewed
         ? el("button", { class: "icon-btn chev", title: isOpen ? "Fold" : "Unfold", html: icon("chevron", "sm"), onclick: toggleOpenFlow })
         : el("span", { html: icon("flows"), style: { color: "var(--accent)" } }),
-      el("h3", null, flow.title),
+      el("h3", null, el("button", {
+        class: "flow-title",
+        title: "Show this flow in the graph",
+        onclick: () => setFocus({ type: "flow", id: flow.id }),
+      }, flow.title)),
       el("span", { class: "badge mono" }, flow.id),
       el("div", { class: "meta" },
         el("span", { class: "badge" + (readCount === flow.path.length ? " verified" : ""), title: "Steps you marked read" }, `${readCount}/${flow.path.length} steps read`),
@@ -2016,12 +2174,14 @@
 
       canvas.appendChild(el("span", {
         class: "ek",
+        "data-edge": edge.id,
         style: { left: middle.x + "px", top: middle.y + "px" },
         onclick: () => select({ type: "edge", id: edge.id }),
         onmouseenter: (event) => showTooltip(event, edgeTooltip(edge)),
         onmouseleave: hideTooltip,
       }, edge.kind));
     });
+    highlightSelection();
   }
 
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -2076,6 +2236,7 @@
 
     link.appendChild(el("span", {
       class: "ek",
+      "data-edge": edge.id,
       onclick: () => select({ type: "edge", id: edge.id }),
       onmouseenter: (event) => showTooltip(event, edgeTooltip(edge)),
       onmouseleave: hideTooltip,
@@ -3126,8 +3287,16 @@
         go: () => {
           const node = reviewData.nodes[+index];
 
-          if (isNonCode(node)) setView("other");
-          else if (state.view !== "graph" && state.view !== "flows") setView("graph");
+          if (isNonCode(node)) {
+            setView("other");
+            select({ type: "node", id: node.id });
+
+            return;
+          }
+
+          // Scoped first, so the graph opens on the node instead of an empty prompt.
+          setFocus({ type: "node", id: node.id });
+          if (state.view !== "graph" && state.view !== "flows") setView("graph");
           select({ type: "node", id: node.id });
         },
       };
@@ -3136,6 +3305,7 @@
       return {
         label: "Show edge",
         go: () => {
+          setFocus({ type: "edge", id: "e" + index });
           if (state.view !== "graph" && state.view !== "flows") setView("graph");
           select({ type: "edge", id: "e" + index });
         },

@@ -182,8 +182,10 @@ graph.
 
 ### Graph
 
-The whole change at a glance: source-code nodes grouped by repo, endpoints
-between repos. Tests, import lines and unchanged nodes sit behind the toolbar
+What you picked in Flows (a step, an edge or a whole flow), the tests of
+what it shows, and what you open around it: each node shows **+N** for its hidden neighbours, so a big change
+stays readable. Source-code nodes are grouped by repo, endpoints between
+repos. Tests, import lines and unchanged nodes sit behind the toolbar
 switches; docs and standalone config get their own **Docs & config** list. Search with `/`, click a node to focus on it and its neighbours.
 
 ![The graph view of a review: changed functions and components, grouped by repo, with the relations between them](docs/images/graph.png)
