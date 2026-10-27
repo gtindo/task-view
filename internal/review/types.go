@@ -2,6 +2,8 @@
 // the structural and cross-reference rules checked before any Git access.
 package review
 
+import "slices"
+
 // SchemaVersion is the review file version this binary writes instructions for.
 const SchemaVersion = 1
 
@@ -75,6 +77,23 @@ type Node struct {
 // IsTest reports whether the node is a test case.
 func (n *Node) IsTest() bool { return n.Kind == "test" }
 
+// EdgeTests is the edge kind that ties a test node to the code it exercises.
+const EdgeTests = "tests"
+
+// flowSubjectKinds are the node kinds that run when a flow runs: every added
+// or modified one must be on a flow.
+var flowSubjectKinds = []string{"code", "component", "entry"}
+
+// offFlowKinds never sit on a flow: tests reach code through `tests` edges,
+// and docs, config and import lines do not run.
+var offFlowKinds = []string{"test", "imports", "doc", "docs", "config"}
+
+// IsFlowSubject reports whether the node is code a flow walks through.
+func (n *Node) IsFlowSubject() bool { return slices.Contains(flowSubjectKinds, n.Kind) }
+
+// CanBeFlowStep reports whether the node may be a step of a flow.
+func (n *Node) CanBeFlowStep() bool { return !slices.Contains(offFlowKinds, n.Kind) }
+
 // IsChanged reports whether the node declares a change.
 func (n *Node) IsChanged() bool { return n.Change != ChangeUnchanged }
 
@@ -86,7 +105,10 @@ type Edge struct {
 	Ref  *Ref   `json:"ref,omitempty"`
 }
 
-// Flow is an ordered walk through the change.
+// Flow is what one entry reaches through the change: Path lists the flow's
+// nodes, entry first, and the edges between them give it its shape, so a
+// flow branches wherever the entry leads to several chains. Tests stays for
+// older files; tests reach code through `tests` edges instead.
 type Flow struct {
 	ID    string   `json:"id"`
 	Title string   `json:"title"`

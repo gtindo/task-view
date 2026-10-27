@@ -157,11 +157,11 @@ The input is one JSON file describing the change as a small graph plus flows and
 | `nodes[]` | `{ id, kind, label, change, ref?, why?, meta? }`. `kind`: `entry`, `code`, `component`, `endpoint`, `test`, `external`, or any string the agent finds useful. `change`: `added`, `modified`, `deleted`, `unchanged` |
 | `nodes[].meta` | Free key-value context from the agent, shown as agent statements. For tests, typically `{ command, observed: "passed" }` |
 | `edges[]` | `{ from, to, kind, ref? }`. `kind`: `calls`, `renders`, `requests`, `serves`, `mocks`, `tests`, `depends`, or any string |
-| `flows[]` | `{ id, title, path: [nodeId...], tests: [nodeId...] }`: an ordered walk from an entry point through the change, with the tests that cover it |
+| `flows[]` | `{ id, title, path: [nodeId...] }`: what one entry reaches through the change. `path` lists the flow's nodes, entry first; the edges between them give the flow its shape, so one flow branches instead of being repeated per branch. `tests: [nodeId...]` is still accepted from older files and checked, but views ignore it: tests reach code through `tests` edges |
 | `claims[]` | `{ text, about: [id...], evidence: [ref...] }`: statements such as "the mock response now has a discount field" |
 | `notes[]` | Free text the agent wants the reviewer to see: doubts, shortcuts, things not done |
 
-`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the test-code checks and the graph's test toggle), `doc`/`docs` (the graph's doc toggle) and `imports` (the graph's imports toggle). The agent context file still asks for a closed list of node and edge kinds with fixed meanings, so two reviews of one change draw the same map.
+`kind` values only choose icons and grouping in the views; the visualizer attaches no meaning to them beyond `test` (used by the test-code checks and the graph's test toggle), `doc`/`docs` and `config` (the Docs & config view), `imports` (the graph's imports toggle), and the flow checks: `entry`, `code` and `component` must be on a flow, and `test`, `imports`, `doc`, `docs` and `config` never sit on one. The agent context file still asks for a closed list of node and edge kinds with fixed meanings, so two reviews of one change draw the same map.
 
 ### Languages
 
@@ -189,6 +189,10 @@ Structural rules live in the JSON Schema; cross-reference rules are checked by t
 | `contains` is 1 to 200 characters, single line, matched exactly (case and whitespace as written) | `schema_invalid` |
 | `ref.at` is a full SHA (schema), and one of the ref's repo commits, not `WORKTREE` (checked with Git) | `schema_invalid`, `bad_at` |
 | A node with `change` other than `unchanged` has a `why` | warning `missing_why` |
+| `flows[].path` holds no node of kind `test`, `imports`, `doc`, `docs` or `config` | `not_flow_step` |
+| Every step of a flow is reachable from its first step through edges (either direction, `tests` edges aside) whose ends are both in the flow | warning `flow_gap` |
+| A flow holds at least one `entry`, `code` or `component` node | warning `flow_without_code` |
+| Every added or modified `entry`, `code` or `component` node is in some flow's `path` | warning `node_not_in_flow` |
 
 Text rules: files are read as UTF-8; CRLF and LF both count as one line break, and a final line break does not start a new line. A binary file (Git's heuristic: a NUL byte in the first 8000 bytes, or Git's diff calls it binary) can only be referenced with a `file` ref; any line-based ref on it is `binary_file`. Renamed files are referenced by their final path; the initial path is taken from `git diff -M` and shown in views. Untracked files under a `WORKTREE` state count as `added`. The review file itself and everything in its `.review/` folder are never part of the diff or of the uncommitted-changes check.
 
@@ -238,7 +242,7 @@ Example, a change across a mock server and a client:
       "ref": { "type": "site", "repo": "web", "file": "src/orders/OrderSummaryCard.test.tsx", "line": 44, "contains": "<OrderSummaryCard" } }
   ],
   "flows": [
-    { "id": "view-order", "title": "User opens an order", "path": ["summary-page", "card", "get-order", "mock-handler"], "tests": ["t-card"] }
+    { "id": "view-order", "title": "User opens an order", "path": ["summary-page", "card", "get-order", "mock-handler"] }
   ],
   "claims": [],
   "notes": ["Server does not return discount yet; the client test runs against the mock only."]
@@ -323,6 +327,7 @@ The complete list of codes `validate` and `gather` can return in schema version 
 | `unknown_repo` | Error, exit 2 | `ref.repo` not in `repos` |
 | `bad_path` | Error, exit 2 | `ref.file` not a clean repo-relative path |
 | `unknown_language` | Error, exit 2 | Language name not known to the highlighter |
+| `not_flow_step` | Error, exit 2 | A flow's `path` names a test, imports, doc or config node |
 | `git_not_found` | Error, exit 3 | No `git` executable on PATH |
 | `repo_not_found` | Error, exit 3 | `repos[].path` does not exist |
 | `not_repo_root` | Error, exit 3 | Path is not the root of a Git repo (for `gather`: not inside one) |
@@ -348,10 +353,13 @@ The complete list of codes `validate` and `gather` can return in schema version 
 | `no_language` | Warning | Referenced file matches no language |
 | `missing_why` | Warning | Changed node without `why` |
 | `empty_change` | Warning | `gather`: a changed repo has no commits in range and no uncommitted work |
+| `flow_gap` | Warning | A flow step its entry cannot reach through edges between the flow's nodes |
+| `flow_without_code` | Warning | A flow with no `entry`, `code` or `component` node |
+| `node_not_in_flow` | Warning | An added or modified `entry`, `code` or `component` node on no flow |
 
 ## Views
 
-One static HTML page: a top bar, a side panel, four views and an inspector. Verification status is drawn the same way everywhere so it reads at a glance.
+One static HTML page: a top bar, a side panel, five views and an inspector. Verification status is drawn the same way everywhere so it reads at a glance.
 
 ### Top bar and side panel
 
@@ -364,14 +372,17 @@ One static HTML page: a top bar, a side panel, four views and an inspector. Veri
 
 | View | Shows | Interaction |
 | --- | --- | --- |
-| Graph | Source-code nodes and the edges between them, laid out with ELK. When nodes reference more than one repo, they are grouped in one box per repo (dashed for `context` repos); nodes without a ref, typically endpoints, sit outside the boxes. Test nodes (kind `test`), doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file), import nodes (kind `imports`) and unchanged nodes are hidden until their toggles are on. Edges show their kind as a label | Click a node to open it in the inspector and dim all but its neighbours. Toggle unchanged, test, doc and import nodes; selecting a hidden node from elsewhere turns its toggle on. Search nodes (`/`, Enter jumps to the first hit, Esc clears), switch the direction (→ or ↓), zoom and fit, fold the legend. Large graphs open centred on the first flow's entry |
-| Flows | One lane per flow, left to right along `path`, each connector labelled and colored by the edge that joins the two steps. Tests listed in `flows[].tests` hang under the first step they have a `tests` edge to; the others are listed under the lane | Click a step, test or connector: opens it in the inspector |
-| Diff map | Every changed file with a bar of its hunks, colored by whether nodes cover them (covered, partly, not mentioned), and a coverage summary | Filter by commit, or to files that need attention or are covered; expand a file (or all) to read its hunks with their commit, the nodes covering them and the uncovered lines; open any hunk in the inspector |
+| Flows | One card per flow, drawn as a graph laid out with ELK from the entry rightwards: the flow's nodes, and the edges between them labelled and colored like the graph's (an edge the flow runs against keeps its own arrow direction). Steps the entry cannot reach are outlined dashed. No tests: they are read in the graph and the inspector. The head counts the steps marked read; a flow marked reviewed folds to its head | Click a step or an edge label: opens it in the inspector. Mark a flow reviewed (it folds) or not; unfold a reviewed flow without unmarking it |
+| Graph | Source-code nodes and the edges between them, laid out with ELK. When nodes reference more than one repo, they are grouped in one box per repo (dashed for `context` repos); nodes without a ref, typically endpoints, sit outside the boxes. Non-code nodes are left to the Docs & config view. Test nodes (kind `test`), import nodes (kind `imports`) and unchanged nodes are hidden until their toggles are on. Edges show their kind as a label; a node marked read shows a check | Click a node to open it in the inspector and dim all but its neighbours. Toggle unchanged, test and import nodes; selecting a hidden node from elsewhere turns its toggle on. Search nodes (`/`, Enter jumps to the first hit, Esc clears), switch the direction (→ or ↓), zoom and fit, fold the legend. Large graphs open centred on the first flow's entry |
+| Diff map | Every changed file with a bar of its hunks, colored by whether nodes cover them (covered, partly, not mentioned), and a summary of coverage and review progress (files reviewed out of all, files left to review). A hunk is reviewed when every node covering it is marked read; a hunk no node covers is marked reviewed on its own; a file is reviewed when all its hunks are | Filter by commit, or to files that need attention or are covered; hide reviewed files; expand a file (or all) to read its hunks with their commit, the nodes covering them and the uncovered lines; mark an uncovered hunk reviewed; open any hunk in the inspector |
 | Claims | Each claim with its status and evidence | Filter by status; expand a piece of evidence to see the resolved fact (code excerpt, hunk, commit) with the failure reason and hint |
+| Docs & config | Nodes that never link to code: doc nodes (kind `doc` or `docs`, or a ref to a `.md`, `.mdx`, `.markdown`, `.rst`, `.adoc` or `.txt` file) and `config` nodes without edges, listed by kind with their read mark, status, label, `why`, change and location. The tab is absent when there are none | Click a node: opens it in the inspector |
 
-The **inspector** opens on the right (resizable; full screen on narrow viewports) for a node, edge, hunk, finding group or the changed tests. For a node it shows the location (ref type and the state read), the agent's account (`why` and `meta`), its findings, its tests, its relations, and its code. The code box has two tabs when the excerpt is in the final state and has changes: **Diff** (changed lines with the removed ones) and **After** (the referenced range, or the whole file for a `file` ref, as it reads in the final state). A `site` line marks its `contains` text. Excerpts carry three lines of context and stop at 600 rows.
+The **inspector** opens on the right (resizable; full screen on narrow viewports) for a node, edge, hunk, finding group or the changed tests. For a node it shows a read toggle in its head, the location (ref type and the state read), then tabs: **Code** (shown first on every newly selected node), the agent's account (`why` and `meta`), its tests, its relations and its findings; a tab with nothing to show is left out. The code box has two tabs when the excerpt is in the final state and has changes: **Diff** (changed lines with the removed ones) and **After** (the referenced range, or the whole file for a `file` ref, as it reads in the final state). A `site` line marks its `contains` text. Excerpts carry three lines of context and stop at 600 rows.
 
-**Navigation:** `1`–`4` switch views, `/` searches the graph, `[` toggles the side panel, Esc closes the inspector. The URL hash (`#view=…&sel=…`) keeps the view and selection, so a link reopens the same place. Theme, panel widths, the code tab and the legend state are kept in local storage.
+**Navigation:** `1`–`5` switch views (Flows, Graph, Diff map, Claims, Docs & config; the page opens on Flows, or on the Graph when there are none), `/` searches the graph, `r` marks the selected node read or unread, `[` toggles the side panel, Esc closes the inspector. The URL hash (`#view=…&sel=…`) keeps the view and selection, so a link reopens the same place. Theme, panel widths, the code tab and the legend state are kept in local storage.
+
+**Review progress:** nodes marked read, flows marked reviewed and uncovered hunks marked reviewed are kept in local storage per review file (keyed by the repo paths and the review file name), so they survive regenerating the page. Each mark remembers a fingerprint of what was read (a node's change, ref and code excerpt; a hunk's rows; a flow's path); when that differs in a regenerated page, the mark no longer counts. The top bar shows how many nodes are read.
 
 ### Visual encoding
 
@@ -381,7 +392,8 @@ The **inspector** opens on the right (resizable; full screen on narrow viewports
 | Contradicted | Red border and ✕, reason on hover |
 | Unresolved | Amber dashed border and ? |
 | Agent statement | Dotted gray border, italic label |
-| Changed node | Filled by change: green added, blue modified, red deleted (label struck through); unchanged nodes plain |
+| Changed node | Filled by change: green added, yellow modified, red deleted (label struck through); unchanged nodes plain |
+| Read node | A check in the corner, label and icon faded |
 | Test node | Rounded; an `observed` value in `meta` is shown as an "agent says" badge (for example "agent says: passed"), green for a pass, red for a failure |
 | Edge | Solid line with a verified site, dotted without ref, red for contradicted, dashed amber for unresolved; `tests` edges have their own arrowhead |
 
@@ -453,8 +465,9 @@ already.
 5. Write nodes, edges, flows, claims and notes (rules below).
 6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
-   `unmentioned_hunk` warning. Repeat until exit code 0 and no
-   `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
+   `unmentioned_hunk` warning and fix every `flow_gap`, `flow_without_code`
+   and `node_not_in_flow` warning. Repeat until exit code 0 and none of
+   those warnings, or explain the remaining ones in `notes`.
 8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
    page to `.review/generated/change-<task>.html`.
 
@@ -493,10 +506,14 @@ change should end up with the same nodes.
 5. **A whole new or deleted file** of code is one node with a `file` ref
    when it holds one declaration; otherwise rule 1 applies to it.
 6. **Unchanged nodes**, only these: the unchanged entry that starts a flow
-   (a route or screen your change is reached from), and the other side of a
+   (a route or screen your change is reached from), the other side of a
    boundary your change crosses (the real server route behind a mock you
-   changed). Endpoints, queues and external services get a node without
-   `ref`.
+   changed), and an unchanged declaration a flow passes through between two
+   changed nodes (a changed handler calls an unchanged service that calls
+   changed code). Give that one a `range` ref over its declaration and the
+   edges on both sides; add only the declarations on the chain, not their
+   other callers or callees. Endpoints, queues and external services get a
+   node without `ref`.
 
 Blank lines next to a node count as covered by it: never stretch a range
 for one.
@@ -565,10 +582,22 @@ edge has no test; the reviewer sees that, so write no notes explaining it.
 One flow per entry your change affects. An entry is a screen or route, a
 user action (a button, a shortcut), a command, an endpoint or a job; two
 actions that run the same handler are one flow.
-`{ "id", "title", "path": [...], "tests": [...] }`: `title` names the entry
-and what happens, in a reader's words; `path` lists node ids from the entry
-along edges through the changed code to the boundary; `tests` lists the
-test nodes that exercise it.
+`{ "id", "title", "path": [...] }`: `title` names the entry and what
+happens, in a reader's words; `path` lists the ids of the nodes the entry
+reaches through the changed code to the boundary, entry first. The edges
+between those nodes give the flow its shape, so a flow branches wherever
+the entry leads to several chains: put every branch in the one flow of its
+entry, never one flow per branch.
+
+- Every node in `path` must be reachable from the entry through edges
+  between nodes of the same `path`. When the chain between two changed
+  nodes runs through unchanged code, put that unchanged node in `path`
+  (rule 6) instead of skipping it.
+- `path` holds code only: never `test`, `imports`, `doc` or `config` nodes.
+  Tests reach the code through `tests` edges, which the reviewer reads in
+  the graph.
+- Every added or modified `entry`, `code` and `component` node is in the
+  `path` of at least one flow.
 
 ## Claims and notes
 
@@ -606,4 +635,4 @@ Three steps, each usable on its own: step 1 lets agents produce accurate review 
 | Where the review file lives for a multi-repo change | `.review/change-<task>.json` in the repo where the task started; any path works since repo paths resolve from the Git root containing the file |
 | Do endpoint nodes get a check | No. Endpoints stay agent statements; each `serves`, `mocks` and `requests` edge is checked through its own `site` ref, which already shows whether each side exists |
 | `site` tolerance | Exact `line` expected; ±2 lines accepted with a `site_offset` warning so the agent corrects it; beyond that `site_mismatch` |
-| Flows without an entry node | Allowed, no warning: `kind` values carry no meaning for checks except `test`. Views draw the flow from its first node |
+| Flows without an entry node | Allowed, no warning: the first node of `path` opens the flow whatever its kind. A flow needs some code (`flow_without_code`) |

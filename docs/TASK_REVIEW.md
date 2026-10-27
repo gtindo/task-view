@@ -53,8 +53,9 @@ already.
 5. Write nodes, edges, flows, claims and notes (rules below).
 6. Run `task-view validate .review/change-<task>.json --format json`.
 7. Fix every error using its `hint`, then add nodes for every
-   `unmentioned_hunk` warning. Repeat until exit code 0 and no
-   `unmentioned_hunk` warnings, or explain the remaining ones in `notes`.
+   `unmentioned_hunk` warning and fix every `flow_gap`, `flow_without_code`
+   and `node_not_in_flow` warning. Repeat until exit code 0 and none of
+   those warnings, or explain the remaining ones in `notes`.
 8. Tell the user: `task-view open .review/change-<task>.json`. It writes the
    page to `.review/generated/change-<task>.html`.
 
@@ -93,10 +94,14 @@ change should end up with the same nodes.
 5. **A whole new or deleted file** of code is one node with a `file` ref
    when it holds one declaration; otherwise rule 1 applies to it.
 6. **Unchanged nodes**, only these: the unchanged entry that starts a flow
-   (a route or screen your change is reached from), and the other side of a
+   (a route or screen your change is reached from), the other side of a
    boundary your change crosses (the real server route behind a mock you
-   changed). Endpoints, queues and external services get a node without
-   `ref`.
+   changed), and an unchanged declaration a flow passes through between two
+   changed nodes (a changed handler calls an unchanged service that calls
+   changed code). Give that one a `range` ref over its declaration and the
+   edges on both sides; add only the declarations on the chain, not their
+   other callers or callees. Endpoints, queues and external services get a
+   node without `ref`.
 
 Blank lines next to a node count as covered by it: never stretch a range
 for one.
@@ -165,10 +170,22 @@ edge has no test; the reviewer sees that, so write no notes explaining it.
 One flow per entry your change affects. An entry is a screen or route, a
 user action (a button, a shortcut), a command, an endpoint or a job; two
 actions that run the same handler are one flow.
-`{ "id", "title", "path": [...], "tests": [...] }`: `title` names the entry
-and what happens, in a reader's words; `path` lists node ids from the entry
-along edges through the changed code to the boundary; `tests` lists the
-test nodes that exercise it.
+`{ "id", "title", "path": [...] }`: `title` names the entry and what
+happens, in a reader's words; `path` lists the ids of the nodes the entry
+reaches through the changed code to the boundary, entry first. The edges
+between those nodes give the flow its shape, so a flow branches wherever
+the entry leads to several chains: put every branch in the one flow of its
+entry, never one flow per branch.
+
+- Every node in `path` must be reachable from the entry through edges
+  between nodes of the same `path`. When the chain between two changed
+  nodes runs through unchanged code, put that unchanged node in `path`
+  (rule 6) instead of skipping it.
+- `path` holds code only: never `test`, `imports`, `doc` or `config` nodes.
+  Tests reach the code through `tests` edges, which the reviewer reads in
+  the graph.
+- Every added or modified `entry`, `code` and `component` node is in the
+  `path` of at least one flow.
 
 ## Claims and notes
 

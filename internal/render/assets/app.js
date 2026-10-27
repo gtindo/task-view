@@ -268,12 +268,17 @@
   }
 
   const state = {
-    view: "graph",
+    // Flows read the change in order; a review without flows opens on its graph.
+    view: reviewData.flows.length ? "flows" : "graph",
     selection: null, // {type: node|edge|hunk|findings|file, id}
     showUnchanged: true,
     showTests: false,
-    showDocs: false,
     showImports: false,
+    hideReviewed: false,
+    // Reviewed flows opened again for this page only; they stay reviewed.
+    openFlows: new Set(),
+    // The node inspector's tab; every newly selected node opens on its code.
+    inspectorTab: "code",
     direction: "RIGHT",
     query: "",
     diffFilter: "all",
@@ -288,17 +293,20 @@
     legend: loadPref("cv-legend", reviewData.nodes.length > LEGEND_FOLDED_ABOVE_NODES ? "0" : "1") === "1",
   };
   const VIEWS = [
-    { id: "graph", label: "Graph", icon: "graph", count: () => reviewData.nodes.length },
     { id: "flows", label: "Flows", icon: "flows", count: () => reviewData.flows.length },
+    { id: "graph", label: "Graph", icon: "graph", count: () => reviewData.nodes.length },
     { id: "diff", label: "Diff map", icon: "diff", count: () => reviewData.files.length },
     { id: "claims", label: "Claims", icon: "claims", count: () => reviewData.claims.length },
+    { id: "other", label: "Docs & config", icon: "doc", count: () => nonCodeNodes().length },
   ];
+  // The non-code tab only appears when the review has such nodes.
+  const isViewShown = (view) => view.id !== "other" || view.count() > 0;
 
   function readHash() {
     const params = new URLSearchParams(location.hash.slice(1));
     const view = params.get("view");
 
-    if (VIEWS.some((candidate) => candidate.id === view)) state.view = view;
+    if (VIEWS.some((candidate) => candidate.id === view && isViewShown(candidate))) state.view = view;
 
     const selection = params.get("sel");
 
@@ -325,6 +333,91 @@
     savePref("cv-theme", state.theme);
   }
 
+  // ── Review marks ───────────────────────────────────────────
+  // What the reviewer has read, kept per review file across regenerated
+  // pages. Each mark stores the fingerprint of what was read, so a node or
+  // hunk whose code changed since counts as unread again.
+  const MARKS_KEY = "cv-marks:" + reviewData.repos.map((repo) => repo.abs).join("|") + "|" + reviewData.reviewName;
+
+  function loadMarks() {
+    const empty = { nodes: {}, hunks: {}, flows: {} };
+
+    try {
+      return { ...empty, ...JSON.parse(localStorage.getItem(MARKS_KEY) || "{}") };
+    } catch {
+      return empty;
+    }
+  }
+
+  const marks = loadMarks();
+
+  function saveMarks() {
+    savePref(MARKS_KEY, JSON.stringify(marks));
+  }
+
+  const FNV_OFFSET = 0x811c9dc5;
+  const FNV_PRIME = 0x01000193;
+  const FINGERPRINT_RADIX = 36;
+
+  // FNV-1a: short, stable and enough to notice that a piece of code changed.
+  function fingerprint(text) {
+    let hash = FNV_OFFSET;
+
+    for (const char of text) {
+      hash = Math.imul(hash ^ char.charCodeAt(0), FNV_PRIME);
+    }
+
+    return (hash >>> 0).toString(FINGERPRINT_RADIX);
+  }
+
+  const rowsText = (rows) => (rows || []).map((row) => row.t + (row.h || "")).join("\n");
+
+  function nodeFingerprint(node) {
+    const excerpt = node.excerpt && reviewData.excerpts[node.excerpt];
+    const code = excerpt ? rowsText(excerpt.rows) : node.label;
+
+    return fingerprint([node.change, node.ref ? node.ref.repo + " " + refText(node.ref) : "", code].join("\n"));
+  }
+
+  const hunkFingerprint = (hunk) => fingerprint(rowsText(hunk.rows));
+  const flowFingerprint = (flow) => fingerprint(flow.path.join(" "));
+
+  // A mark counts only while what it fingerprinted is unchanged.
+  const isMarked = (store, id, currentFingerprint) => marks[store][id] === currentFingerprint;
+
+  function setMark(store, id, currentFingerprint, isOn) {
+    if (isOn) marks[store][id] = currentFingerprint;
+    else delete marks[store][id];
+    saveMarks();
+  }
+
+  const isNodeRead = (id) => nodeById.has(id) && isMarked("nodes", id, nodeFingerprint(nodeById.get(id)));
+  const setNodeRead = (id, isRead) => setMark("nodes", id, nodeFingerprint(nodeById.get(id)), isRead);
+  const isFlowReviewed = (flow) => isMarked("flows", flow.id, flowFingerprint(flow));
+  const setFlowReviewed = (flow, isReviewed) => setMark("flows", flow.id, flowFingerprint(flow), isReviewed);
+  // A file without hunks (binary, pure rename) is marked by its own id.
+  const ownMarkFingerprint = (file, hunk) => (hunk ? hunkFingerprint(hunk) : fingerprint(file.status + file.path));
+  const isOwnMarked = (file, hunk) => isMarked("hunks", hunk ? hunk.id : file.id, ownMarkFingerprint(file, hunk));
+  const setOwnMark = (file, hunk, isOn) => setMark("hunks", hunk ? hunk.id : file.id, ownMarkFingerprint(file, hunk), isOn);
+
+  // The nodes whose reading covers a hunk: its own nodes and whole-file nodes.
+  const coveringNodes = (file, hunk) => [...new Set([...(hunk ? hunk.nodes : []), ...(file.fileNodes || [])])];
+
+  // Reviewed when every covering node is read; a change no node covers needs its own mark.
+  function isHunkReviewed(file, hunk) {
+    const nodeIds = coveringNodes(file, hunk);
+
+    if (!nodeIds.length) return isOwnMarked(file, hunk);
+
+    return nodeIds.every(isNodeRead);
+  }
+
+  function isFileReviewed(file) {
+    if (!file.hunks.length) return isHunkReviewed(file, null);
+
+    return file.hunks.every((hunk) => isHunkReviewed(file, hunk));
+  }
+
   // ── Shell ──────────────────────────────────────────────────
   const app = document.getElementById("app");
   let viewEl;
@@ -334,11 +427,13 @@
   let toolbarEl;
   let bodyEl;
   let sidebarButton;
+  let readPillEl;
 
   function render() {
     applyTheme();
     app.innerHTML = "";
     app.appendChild(topbar());
+    updateReadPill();
 
     const banner = errorBanner();
 
@@ -425,7 +520,9 @@
           plural(warningCount, "warning").replace(/^\d+ /, ""),
           () => openFindings("warnings"),
           "Diff-level findings and warnings",
-        )),
+        ),
+        el("span", { class: "tb-sep" }),
+        readPillEl = el("span", { class: "pill read", title: "Nodes you marked read (r on a selected node)" })),
       el("button", {
         class: "icon-btn",
         title: `Theme: ${state.theme}`,
@@ -435,6 +532,40 @@
           render();
         },
       }));
+  }
+
+  function updateReadPill() {
+    const readCount = reviewData.nodes.filter((node) => isNodeRead(node.id)).length;
+
+    readPillEl.classList.toggle("done", readCount === reviewData.nodes.length);
+    readPillEl.innerHTML = `${icon("check", "sm")}<b>${readCount}/${reviewData.nodes.length}</b><span>read</span>`;
+  }
+
+  // Redraws everything that shows review marks after one changed, keeping
+  // the graph's camera and the view's scroll position.
+  function refreshMarks() {
+    updateReadPill();
+    renderInspector();
+
+    if (state.view === "graph") {
+      if (!graph) return;
+
+      removeOverlayLabels(graph.nodes());
+      addOverlayLabels(graph.nodes());
+      requestOverlaySync();
+
+      return;
+    }
+
+    const scrollTop = viewEl.scrollTop;
+
+    renderView();
+    viewEl.scrollTop = scrollTop;
+  }
+
+  function toggleNodeRead(id) {
+    setNodeRead(id, !isNodeRead(id));
+    refreshMarks();
   }
 
   function errorBanner() {
@@ -730,6 +861,8 @@
   function renderTabs() {
     tabbarEl.innerHTML = "";
     VIEWS.forEach((view, i) => {
+      if (!isViewShown(view)) return;
+
       tabbarEl.appendChild(el("button", {
         class: "tab" + (state.view === view.id ? " on" : ""),
         title: `${view.label} (${i + 1})`,
@@ -756,12 +889,15 @@
     viewEl.scrollTop = 0;
     toolbarEl.innerHTML = "";
 
-    const renderers = { graph: graphView, flows: flowsView, diff: diffView, claims: claimsView };
+    const renderers = { graph: graphView, flows: flowsView, diff: diffView, claims: claimsView, other: otherView };
 
     renderers[state.view]();
   }
 
   function select(selection) {
+    const isNewNode = selection && selection.type === "node" && !(state.selection && state.selection.type === "node" && state.selection.id === selection.id);
+
+    if (isNewNode) state.inspectorTab = "code";
     state.selection = selection;
     renderInspector();
     if (state.view === "graph" && revealInGraph(selection)) {
@@ -950,10 +1086,10 @@
     ];
   }
 
-  // The graph opens on source code only; tests, docs and import lines sit
-  // behind toggles, each named by the state key that shows its group.
+  // The graph opens on source code only; tests and import lines sit behind
+  // toggles, each named by the state key that shows its group.
   const DOC_FILE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
-  const GROUP_TOGGLES = { test: "showTests", doc: "showDocs", imports: "showImports" };
+  const GROUP_TOGGLES = { test: "showTests", imports: "showImports" };
 
   function nodeGroup(node) {
     if (node.kind === "test") return "test";
@@ -966,7 +1102,19 @@
     return "source";
   }
 
+  // Docs, and config no code reads, never link to code: they get their own
+  // tab instead of floating unconnected in the graph.
+  function isNonCode(node) {
+    const isUnlinkedConfig = node.kind === "config" && !outgoingEdges(node.id).length && !incomingEdges(node.id).length;
+
+    return nodeGroup(node) === "doc" || isUnlinkedConfig;
+  }
+
+  const nonCodeNodes = () => reviewData.nodes.filter(isNonCode);
+
   function inGraph(node) {
+    if (isNonCode(node)) return false;
+
     const group = nodeGroup(node);
     const changeShown = state.showUnchanged || node.change !== "unchanged";
     const toggleKey = GROUP_TOGGLES[group];
@@ -983,7 +1131,7 @@
     const hidden = (edge ? [edge.from, edge.to] : [selection.id])
       .map((id) => nodeById.get(id))
       .filter(Boolean)
-      .filter((node) => !inGraph(node));
+      .filter((node) => !isNonCode(node) && !inGraph(node));
 
     hidden.forEach((node) => {
       const group = nodeGroup(node);
@@ -1068,10 +1216,10 @@
     const directionToggle = el("div", { class: "seg" },
       directionButton("RIGHT", "→", "Left to right"),
       directionButton("DOWN", "↓", "Top to bottom"));
-    const unchangedCount = reviewData.nodes.filter((node) => node.change === "unchanged").length;
-    const testCount = reviewData.nodes.filter((node) => nodeGroup(node) === "test").length;
-    const docCount = reviewData.nodes.filter((node) => nodeGroup(node) === "doc").length;
-    const importsCount = reviewData.nodes.filter((node) => nodeGroup(node) === "imports").length;
+    const graphNodes = reviewData.nodes.filter((node) => !isNonCode(node));
+    const unchangedCount = graphNodes.filter((node) => node.change === "unchanged").length;
+    const testCount = graphNodes.filter((node) => nodeGroup(node) === "test").length;
+    const importsCount = graphNodes.filter((node) => nodeGroup(node) === "imports").length;
     const toggle = (key, label, count, title) => el("label", { class: "toggle", title },
       el("input", {
         type: "checkbox",
@@ -1104,14 +1252,13 @@
       },
     });
 
-    // A review without tests, docs or imports gets no switch for them. Native append
+    // A review without tests or imports gets no switch for them. Native append
     // would print a skipped switch as the text "null", so drop it first.
     const toolbarItems = [
       search,
       el("span", { class: "tb-sep" }),
       toggle("showUnchanged", "Unchanged", unchangedCount, "Show nodes the change does not modify"),
       testCount ? toggle("showTests", "Tests", testCount, "Show test nodes") : null,
-      docCount ? toggle("showDocs", "Docs", docCount, "Show documentation nodes") : null,
       importsCount ? toggle("showImports", "Imports", importsCount, "Show nodes for import and other top-level lines") : null,
       el("span", { class: "tb-sep" }),
       directionToggle,
@@ -1151,8 +1298,11 @@
         el("div", { class: "sb" }, `${node.kind} · ${nodeSubtitle(node)}`),
         observed ? el("span", { class: "says " + observedClass(observed.value) }, `agent says: ${observed.value}`) : null),
       isProblemStatus(status) ? el("div", { class: `st ${status}`, html: icon(STATUS_ICON[status], statusIconClass) }) : null,
+      isNodeRead(node.id) ? el("div", { class: "rd", title: "Read", html: icon("check") }) : null,
     ];
   }
+
+  const readClass = (node) => (isNodeRead(node.id) ? " read" : "");
 
   // The HTML drawn over a graph node: a node card, or the name tag of a repo box.
   function overlayLabel(graphNode) {
@@ -1161,7 +1311,7 @@
     const node = nodeById.get(graphNode.id());
 
     return el("div", {
-      class: `gn ${node.change} ${node.result.status}`,
+      class: `gn ${node.change} ${node.result.status}${readClass(node)}`,
       style: { width: graphNode.data("w") + "px", height: graphNode.data("h") + "px" },
     }, nodeCardBody(node, ""));
   }
@@ -1391,6 +1541,9 @@
     const syncOverlay = () => {
       frameRequest = 0;
 
+      // The inspector asks for a sync after its transition, even once another view replaced the graph.
+      if (!graph) return;
+
       const pan = graph.pan();
       const zoom = graph.zoom();
 
@@ -1528,7 +1681,7 @@
     const selection = state.selection;
     const isNodeSelection = selection && selection.type === "node";
 
-    document.querySelectorAll(".ncard").forEach((card) => card.classList.toggle("sel", Boolean(isNodeSelection && card.dataset.node === selection.id)));
+    document.querySelectorAll(".ncard, .orow").forEach((card) => card.classList.toggle("sel", Boolean(isNodeSelection && card.dataset.node === selection.id)));
   }
 
   function legend() {
@@ -1620,7 +1773,7 @@
   // isSmall: a narrower card hanging off a flow step as one of its tests.
   function nodeCard(node, isSmall) {
     return el("button", {
-      class: `ncard ${node.change} ${node.result.status}${node.kind === "test" ? " test" : ""}`,
+      class: `ncard ${node.change} ${node.result.status}${node.kind === "test" ? " test" : ""}${readClass(node)}`,
       "data-node": node.id,
       onclick: () => select({ type: "node", id: node.id }),
       onmouseenter: (event) => showTooltip(event, nodeTooltip(node)),
@@ -1642,53 +1795,277 @@
     highlightSelection();
   }
 
+  // The flow's steps, the edges between them (`tests` edges aside) and each
+  // step's depth from the entry. Edges are followed either way, as the
+  // validator does, since a flow runs against some of them (an endpoint
+  // reaches the handler that serves it).
+  function flowStructure(flow) {
+    const steps = [...new Set(flow.path.filter((id) => nodeById.has(id)))];
+    const inFlow = new Set(steps);
+    const links = reviewData.edges.filter((edge) => edge.kind !== "tests" && edge.from !== edge.to && inFlow.has(edge.from) && inFlow.has(edge.to));
+    const depth = new Map(steps.length ? [[steps[0], 0]] : []);
+    const queue = steps.slice(0, 1);
+
+    while (queue.length) {
+      const step = queue.shift();
+      const neighbours = links.flatMap((edge) => {
+        if (edge.from === step) return [edge.to];
+        if (edge.to === step) return [edge.from];
+
+        return [];
+      });
+
+      neighbours.filter((next) => !depth.has(next)).forEach((next) => {
+        depth.set(next, depth.get(step) + 1);
+        queue.push(next);
+      });
+    }
+
+    return { steps, links, depth };
+  }
+
+  // An edge is laid out from the step nearer the entry to the farther one;
+  // backward when that runs against the edge's own direction.
+  function isBackwardLink(edge, depth) {
+    const fromDepth = depth.has(edge.from) ? depth.get(edge.from) : Infinity;
+    const toDepth = depth.has(edge.to) ? depth.get(edge.to) : Infinity;
+
+    return toDepth < fromDepth;
+  }
+
   function flowCard(flow) {
-    const tests = (flow.tests || []).map((id) => nodeById.get(id)).filter(Boolean);
-    // The first step the test has a `tests` edge to; tests without one are listed below the lane.
-    const testedStep = (test) => flow.path.find((stepId) => outgoingEdges(test.id).some((edge) => edge.kind === "tests" && edge.to === stepId));
-    const attached = groupBy(tests.filter(testedStep), testedStep);
-    const loose = tests.filter((test) => !testedStep(test));
     const issueCount = flow.path.filter((id) => isProblemStatus(nodeById.get(id)?.result.status)).length;
-    const card = el("section", { class: "flow" });
+    const readCount = flow.path.filter(isNodeRead).length;
+    const isReviewed = isFlowReviewed(flow);
+    const isOpen = !isReviewed || state.openFlows.has(flow.id);
+    const card = el("section", { class: "flow" + (isReviewed ? " reviewed" : "") + (isOpen ? "" : " folded") });
+    const toggleOpenFlow = () => {
+      if (isOpen) state.openFlows.delete(flow.id);
+      else state.openFlows.add(flow.id);
+      refreshMarks();
+    };
 
     card.appendChild(el("div", { class: "flow-head" },
-      el("span", { html: icon("flows"), style: { color: "var(--accent)" } }),
+      isReviewed
+        ? el("button", { class: "icon-btn chev", title: isOpen ? "Fold" : "Unfold", html: icon("chevron", "sm"), onclick: toggleOpenFlow })
+        : el("span", { html: icon("flows"), style: { color: "var(--accent)" } }),
       el("h3", null, flow.title),
       el("span", { class: "badge mono" }, flow.id),
       el("div", { class: "meta" },
-        el("span", { class: "badge" }, plural(flow.path.length, "step")),
-        el("span", { class: "badge", html: icon("test", "sm") + escapeHTML(plural(tests.length, "test")) }),
-        issueCount ? el("span", { class: "badge contradicted" }, plural(issueCount, "issue")) : null)));
+        el("span", { class: "badge" + (readCount === flow.path.length ? " verified" : ""), title: "Steps you marked read" }, `${readCount}/${flow.path.length} steps read`),
+        issueCount ? el("span", { class: "badge contradicted" }, plural(issueCount, "issue")) : null,
+        el("button", {
+          class: "read-btn" + (isReviewed ? " on" : ""),
+          "aria-pressed": String(isReviewed),
+          title: isReviewed ? "Mark not reviewed" : "Mark reviewed and fold",
+          html: icon("check", "sm") + (isReviewed ? "Reviewed" : "Mark reviewed"),
+          onclick: () => {
+            setFlowReviewed(flow, !isReviewed);
+            state.openFlows.delete(flow.id);
+            refreshMarks();
+          },
+        }))));
 
-    const lane = el("div", { class: "lane" });
+    if (!isOpen) return card;
 
-    flow.path.forEach((id, i) => {
-      const node = nodeById.get(id);
+    const structure = flowStructure(flow);
 
-      if (!node) return;
-      if (i > 0) lane.appendChild(connector(flow.path[i - 1], id));
+    if (typeof ELK === "undefined") {
+      card.appendChild(linearLane(structure));
 
-      const step = el("div", { class: "step" }, el("div", { class: "step-n" }, String(i + 1).padStart(2, "0")), nodeCard(node));
-      const stepTests = attached.get(id) || [];
-
-      if (stepTests.length) {
-        step.appendChild(el("div", { class: "attached" }, stepTests.map((test) => [el("div", { class: "stem" }), nodeCard(test, true)])));
-      }
-      lane.appendChild(step);
-    });
-    card.appendChild(lane);
-
-    if (loose.length || !tests.length) {
-      card.appendChild(el("div", { class: "flow-foot" },
-        tests.length
-          ? [el("span", null, "Tests on this flow without a `tests` edge to a step:"), loose.map((test) => nodeChip(test))]
-          : el("span", { class: "muted", html: icon("info", "sm") + " No tests listed for this flow." })));
+      return card;
     }
+
+    const lane = el("div", { class: "lane dag" });
+
+    card.appendChild(lane);
+    // Cards are measured once the card is in the page, which the caller does
+    // before this microtask runs; a frame callback would stall in a hidden tab.
+    Promise.resolve().then(() => layoutFlowLane(lane, flow, structure));
 
     return card;
   }
 
-  // The link between two consecutive flow steps, drawn from the edge that joins them either way.
+  // The flow as a row in path order, for a page whose layout engine is missing or failed.
+  function linearLane(structure) {
+    return el("div", { class: "lane" }, structure.steps.map((id, i) => [
+      i > 0 ? connector(structure.steps[i - 1], id) : null,
+      el("div", { class: "step" }, nodeCard(nodeById.get(id))),
+    ]));
+  }
+
+  const FLOW_LAYOUT = {
+    padding: 8,
+    betweenLayers: 84,
+    betweenNodes: 26,
+    arrowLength: 8,
+    arrowHalfWidth: 4.5,
+  };
+  // Laid-out positions by flow, so redrawing a flow (a read mark changed)
+  // places its cards at once instead of flickering through a new layout.
+  const flowLayouts = new Map();
+  let elkEngine = null;
+
+  // ELK graph ids are namespaced: a node id and an edge id may be equal.
+  const flowNodeKey = (id) => "n:" + id;
+  const flowEdgeKey = (edge) => "e:" + edge.id;
+
+  function flowElkGraph(structure, sizes) {
+    return {
+      id: "flow",
+      layoutOptions: {
+        "elk.algorithm": "layered",
+        "elk.direction": "RIGHT",
+        "elk.edgeRouting": "ORTHOGONAL",
+        "elk.padding": `[top=${FLOW_LAYOUT.padding},left=${FLOW_LAYOUT.padding},bottom=${FLOW_LAYOUT.padding},right=${FLOW_LAYOUT.padding}]`,
+        "elk.layered.spacing.nodeNodeBetweenLayers": String(FLOW_LAYOUT.betweenLayers),
+        "elk.spacing.nodeNode": String(FLOW_LAYOUT.betweenNodes),
+        "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
+      },
+      children: structure.steps.map((id, i) => ({
+        id: flowNodeKey(id),
+        width: sizes.get(id).width,
+        height: sizes.get(id).height,
+        // The entry always opens the flow, even when an unreached step has no incoming edge either.
+        layoutOptions: i === 0 ? { "elk.layered.layering.layerConstraint": "FIRST" } : {},
+      })),
+      edges: structure.links.map((edge) => {
+        const isBackward = isBackwardLink(edge, structure.depth);
+
+        return {
+          id: flowEdgeKey(edge),
+          sources: [flowNodeKey(isBackward ? edge.to : edge.from)],
+          targets: [flowNodeKey(isBackward ? edge.from : edge.to)],
+        };
+      }),
+    };
+  }
+
+  // Draws the flow's cards, then lays them out with ELK and draws the edges.
+  async function layoutFlowLane(lane, flow, structure) {
+    const canvas = el("div", { class: "dag-canvas pending" });
+    const cards = new Map(structure.steps.map((id) => {
+      const isGap = !structure.depth.has(id);
+      const step = el("div", {
+        class: "dag-step" + (isGap ? " gap" : ""),
+        title: isGap ? "No edge joins this step to the flow's entry" : null,
+      }, nodeCard(nodeById.get(id)));
+
+      return [id, step];
+    }));
+
+    canvas.append(...cards.values());
+    lane.appendChild(canvas);
+
+    const sizes = new Map([...cards].map(([id, step]) => [id, { width: step.offsetWidth, height: step.offsetHeight }]));
+    const layoutKey = flow.id + JSON.stringify([...sizes.values()]);
+
+    try {
+      if (!flowLayouts.has(layoutKey)) {
+        elkEngine = elkEngine || new ELK();
+        flowLayouts.set(layoutKey, await elkEngine.layout(flowElkGraph(structure, sizes)));
+      }
+    } catch {
+      lane.replaceWith(linearLane(structure));
+
+      return;
+    }
+
+    // The view may have been redrawn while ELK worked.
+    if (!lane.isConnected) return;
+
+    drawFlowLayout(canvas, cards, structure, flowLayouts.get(layoutKey));
+    canvas.classList.remove("pending");
+  }
+
+  function drawFlowLayout(canvas, cards, structure, layout) {
+    canvas.style.setProperty("width", layout.width + "px");
+    canvas.style.setProperty("height", layout.height + "px");
+    layout.children.forEach((child) => {
+      const step = cards.get(child.id.slice(flowNodeKey("").length));
+
+      step.style.left = child.x + "px";
+      step.style.top = child.y + "px";
+    });
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    const edgeByKey = new Map(structure.links.map((edge) => [flowEdgeKey(edge), edge]));
+
+    svg.setAttribute("class", "dag-edges");
+    svg.setAttribute("width", layout.width);
+    svg.setAttribute("height", layout.height);
+    canvas.prepend(svg);
+    layout.edges.forEach((laidOut) => {
+      const edge = edgeByKey.get(laidOut.id);
+      const points = (laidOut.sections || []).flatMap((section) => [section.startPoint, ...(section.bendPoints || []), section.endPoint]);
+
+      if (!edge || points.length < 2) return;
+
+      // The arrowhead marks the edge's own target, which is the route's start when it was laid out backward.
+      const arrowPoints = isBackwardLink(edge, structure.depth) ? [...points].reverse() : points;
+      const group = svgEl("g", { class: `dag-edge ${edge.ref ? edge.result.status : "agent"}` });
+
+      const [tail, tip] = arrowPoints.slice(-SEGMENT_POINTS);
+
+      group.append(
+        svgEl("polyline", { points: points.map((point) => `${point.x},${point.y}`).join(" ") }),
+        svgEl("polygon", { points: arrowHead(tail, tip) }));
+      svg.appendChild(group);
+
+      const middle = routeMidpoint(points);
+
+      canvas.appendChild(el("span", {
+        class: "ek",
+        style: { left: middle.x + "px", top: middle.y + "px" },
+        onclick: () => select({ type: "edge", id: edge.id }),
+        onmouseenter: (event) => showTooltip(event, edgeTooltip(edge)),
+        onmouseleave: hideTooltip,
+      }, edge.kind));
+    });
+  }
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const SEGMENT_POINTS = 2;
+
+  function svgEl(tag, attrs) {
+    const element = document.createElementNS(SVG_NS, tag);
+
+    Object.entries(attrs).forEach(([name, value]) => element.setAttribute(name, value));
+
+    return element;
+  }
+
+  // The triangle at tip, pointing along the segment from tail.
+  function arrowHead(tail, tip) {
+    const length = Math.hypot(tip.x - tail.x, tip.y - tail.y) || 1;
+    const along = { x: (tip.x - tail.x) / length, y: (tip.y - tail.y) / length };
+    const base = { x: tip.x - along.x * FLOW_LAYOUT.arrowLength, y: tip.y - along.y * FLOW_LAYOUT.arrowLength };
+    const across = { x: -along.y * FLOW_LAYOUT.arrowHalfWidth, y: along.x * FLOW_LAYOUT.arrowHalfWidth };
+
+    return [tip, { x: base.x + across.x, y: base.y + across.y }, { x: base.x - across.x, y: base.y - across.y }]
+      .map((point) => `${point.x},${point.y}`)
+      .join(" ");
+  }
+
+  // The point halfway along a polyline, where the edge's label sits.
+  function routeMidpoint(points) {
+    const segments = points.slice(1).map((point, i) => ({ from: points[i], to: point, length: Math.hypot(point.x - points[i].x, point.y - points[i].y) }));
+    const half = segments.reduce((sum, segment) => sum + segment.length, 0) / 2;
+    let walked = 0;
+
+    for (const segment of segments) {
+      if (walked + segment.length >= half) {
+        const share = segment.length ? (half - walked) / segment.length : 0;
+
+        return { x: segment.from.x + (segment.to.x - segment.from.x) * share, y: segment.from.y + (segment.to.y - segment.from.y) * share };
+      }
+      walked += segment.length;
+    }
+
+    return points[0];
+  }
+
+  // The link between two neighbouring steps of a linear lane, drawn from the edge that joins them either way.
   function connector(fromId, toId) {
     const forward = outgoingEdges(fromId).find((edge) => edge.to === toId);
     const reverse = !forward && outgoingEdges(toId).find((edge) => edge.to === fromId);
@@ -1715,13 +2092,48 @@
   };
 
   function nodeChip(node) {
+    const isRead = isNodeRead(node.id);
+
     return el("button", {
-      class: "chip" + (node.kind === "test" ? " test" : ""),
+      class: "chip" + (node.kind === "test" ? " test" : "") + (isRead ? " read" : ""),
       onclick: () => select({ type: "node", id: node.id }),
-      title: `${node.kind} · ${STATUS_LABEL[node.result.status]}`,
+      title: `${node.kind} · ${STATUS_LABEL[node.result.status]}${isRead ? " · read" : ""}`,
     },
     el("span", { class: "dot", style: { background: STATUS_COLOR[node.result.status] } }),
-    node.label);
+    node.label,
+    isRead ? el("span", { class: "rd", html: icon("check", "sm") }) : null);
+  }
+
+  // ── Docs & config view ─────────────────────────────────────
+  function otherView() {
+    const nodes = nonCodeNodes();
+
+    if (!nodes.length) {
+      viewEl.appendChild(el("div", { class: "empty" }, el("div", null, htmlFragment(icon("doc")), el("div", null, "No documentation or standalone config nodes."))));
+
+      return;
+    }
+
+    const byKind = groupBy(nodes, (node) => node.kind);
+
+    viewEl.appendChild(el("div", { class: "others" }, [...byKind].map(([kind, kindNodes]) => el("section", { class: "dm-repo" },
+      el("div", { class: "dm-repo-head", html: icon(kindIcon(kind), "sm") },
+        el("span", { class: "name" }, kind),
+        el("span", { class: "spacer" }),
+        el("span", { class: "muted", style: { fontSize: "12px" } }, `${kindNodes.filter((node) => isNodeRead(node.id)).length}/${kindNodes.length} read`)),
+      kindNodes.map(otherRow)))));
+    highlightSelection();
+  }
+
+  function otherRow(node) {
+    return el("button", { class: "orow" + readClass(node), "data-node": node.id, onclick: () => select({ type: "node", id: node.id }) },
+      el("span", { class: "rd", title: isNodeRead(node.id) ? "Read" : "Not read yet", html: icon(isNodeRead(node.id) ? "checkcircle" : "other", "sm") }),
+      el("span", { class: "sdot " + node.result.status, title: STATUS_LABEL[node.result.status] }),
+      el("div", { class: "otx" },
+        el("div", { class: "lb" }, node.label),
+        node.why ? el("div", { class: "why" }, node.why) : null),
+      changeBadge(node.change),
+      el("span", { class: "where" }, node.ref ? refText(node.ref) : "no ref"));
   }
 
   // ── Diff map ───────────────────────────────────────────────
@@ -1773,6 +2185,18 @@
         },
       }, label))));
     toolbarEl.appendChild(el("span", { class: "tb-sep" }));
+    toolbarEl.appendChild(el("label", { class: "toggle", title: "Hide files whose changes you have reviewed" },
+      el("input", {
+        type: "checkbox",
+        checked: state.hideReviewed,
+        onchange: (event) => {
+          state.hideReviewed = event.target.checked;
+          renderView();
+        },
+      }),
+      el("span", { class: "sw" }),
+      "Hide reviewed"));
+    toolbarEl.appendChild(el("span", { class: "tb-sep" }));
     toolbarEl.appendChild(el("button", {
       class: "icon-btn",
       title: "Expand all",
@@ -1801,8 +2225,13 @@
     const total = hunks.length || 1;
     const added = reviewData.files.reduce((sum, file) => sum + file.added, 0);
     const removed = reviewData.files.reduce((sum, file) => sum + file.removed, 0);
+    const reviewedCount = reviewData.files.filter(isFileReviewed).length;
 
     return el("div", { class: "dm-summary" },
+      el("div", { class: "dm-stat", title: "Files whose changes are all reviewed: every covering node read, or marked here" },
+        el("span", { class: "v" + (reviewedCount === reviewData.files.length ? " plus" : "") }, `${reviewedCount}/${reviewData.files.length}`),
+        el("span", { class: "k" }, "reviewed")),
+      el("div", { class: "dm-stat" }, el("span", { class: "v" }, reviewData.files.length - reviewedCount), el("span", { class: "k" }, "to review")),
       el("div", { class: "dm-stat" }, el("span", { class: "v" }, reviewData.files.length), el("span", { class: "k" }, "files")),
       el("div", { class: "dm-stat" }, el("span", { class: "v" }, hunks.length), el("span", { class: "k" }, "hunks")),
       el("div", { class: "dm-stat" }, el("span", { class: "v plus" }, "+" + added), el("span", { class: "k" }, "added")),
@@ -1834,7 +2263,9 @@
     if (!repoFiles.length) return null;
     if (state.commitFilter && !state.commitFilter.startsWith(repo.id + "@")) return null;
 
-    const shownFiles = repoFiles.filter((file) => matchesDiffFilter(file) && matchesCommitFilter(file));
+    const matchingFiles = repoFiles.filter((file) => matchesDiffFilter(file) && matchesCommitFilter(file));
+    const shownFiles = matchingFiles.filter((file) => !state.hideReviewed || !isFileReviewed(file));
+    const emptyNote = matchingFiles.length ? "Every file here is reviewed." : "No files match this filter.";
     const section = el("section", { class: "dm-repo" });
 
     section.appendChild(el("div", { class: "dm-repo-head", html: icon("repo", "sm") },
@@ -1843,7 +2274,7 @@
       el("span", { class: "spacer" }),
       el("span", { class: "badge mono" }, repo.worktree ? "worktree" : shortSha(repo.commits[0]?.sha)),
       el("span", { class: "muted", style: { fontSize: "12px" } }, plural(repoFiles.length, "file"))));
-    if (!shownFiles.length) section.appendChild(el("div", { class: "code-note" }, "No files match this filter."));
+    if (!shownFiles.length) section.appendChild(el("div", { class: "code-note" }, emptyNote));
     shownFiles.forEach((file) => section.append(...fileRow(file)));
 
     return section;
@@ -1913,7 +2344,8 @@
       file.language || "plain text",
       file.hasTests ? "test file" : null,
     ];
-    const row = el("div", { class: "frow" + (isOpen ? " open" : ""), onclick: () => toggleOpen(file.id, isOpen) },
+    const isReviewed = isFileReviewed(file);
+    const row = el("div", { class: "frow" + (isOpen ? " open" : "") + (isReviewed ? " reviewed" : ""), onclick: () => toggleOpen(file.id, isOpen) },
       el("span", { class: "chev", html: icon("chevron", "sm") }),
       el("span", { class: "fstat " + file.status, title: CHANGE_LABEL[file.status] }, STATUS_LETTER[file.status]),
       el("div", { style: { minWidth: 0 } },
@@ -1923,7 +2355,9 @@
       el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
         el("span", { html: icon(coverageIcon[0], "sm"), style: { color: coverageIcon[1] } }),
         el("div", { class: "track", style: { flex: 1 } }, trackSegments(file))),
-      el("div", { class: "fnums" }, el("span", { class: "plus" }, `+${file.added}`), " ", el("span", { class: "minus" }, `−${file.removed}`)));
+      el("div", { class: "fnums" },
+        isReviewed ? el("span", { class: "rd", title: "Reviewed", html: icon("checkcircle", "sm") }) : null,
+        el("span", { class: "plus" }, `+${file.added}`), " ", el("span", { class: "minus" }, `−${file.removed}`)));
 
     if (!isOpen) return [row];
 
@@ -1934,7 +2368,11 @@
         el("span", { class: "muted" }, "Whole file covered by"),
         file.fileNodes.map((id) => nodeChip(nodeById.get(id)))));
     }
-    if (!file.hunks.length) body.appendChild(el("div", { class: "code-note" }, file.binary ? "Binary file: no line diff." : "Renamed without content change."));
+    if (!file.hunks.length) {
+      body.appendChild(el("div", { class: "code-note" },
+        file.binary ? "Binary file: no line diff." : "Renamed without content change.",
+        coveringNodes(file, null).length ? null : ownMarkButton(file, null)));
+    }
     file.hunks.filter((hunk) => hunkInCommit(file, hunk)).forEach((hunk) => body.appendChild(hunkBox(file, hunk)));
 
     return [row, body];
@@ -1955,6 +2393,33 @@
 
   const HUNK_COVERAGE_LABEL = { covered: "Covered", partial: "Partly covered", uncovered: "Not mentioned by any node" };
 
+  // Marks a change no node covers (a hunk, or a file without hunks when hunk
+  // is null) as reviewed; covered changes are reviewed through their nodes.
+  function ownMarkButton(file, hunk) {
+    const isOn = isOwnMarked(file, hunk);
+
+    return el("button", {
+      class: "read-btn" + (isOn ? " on" : ""),
+      "aria-pressed": String(isOn),
+      title: "No node covers this change, so mark it here",
+      html: icon("check", "sm") + (isOn ? "Reviewed" : "Mark reviewed"),
+      onclick: (event) => {
+        event.stopPropagation();
+        setOwnMark(file, hunk, !isOn);
+        refreshMarks();
+      },
+    });
+  }
+
+  // How a hunk's review is shown: a mark button when no node covers it,
+  // else a badge once every covering node is read.
+  function hunkReviewControl(file, hunk) {
+    if (!coveringNodes(file, hunk).length) return ownMarkButton(file, hunk);
+    if (!isHunkReviewed(file, hunk)) return null;
+
+    return el("span", { class: "badge verified", title: "Every node covering this change is read", html: icon("check", "sm") + "Reviewed via nodes" });
+  }
+
   function hunkBox(file, hunk) {
     const showUncovered = hunk.uncovered && hunk.coverage === "partial";
     const box = el("div", { class: "hunk " + hunk.coverage, id: "hunk-" + hunk.id });
@@ -1971,6 +2436,7 @@
         title: "Written by " + (sha === "WORKTREE" ? "uncommitted work" : sha),
       }, sha === "WORKTREE" ? "worktree" : shortSha(sha))),
       hunk.nodes.map((id) => nodeChip(nodeById.get(id))),
+      hunkReviewControl(file, hunk),
       el("button", {
         class: "icon-btn",
         title: "Open in inspector",
@@ -2356,7 +2822,8 @@
     return allFindings.filter((finding) => finding.path && (finding.path === path || finding.path.startsWith(path + "/")));
   }
 
-  function agentAccountSection(node) {
+  // The agent's why and meta for a node, or null when it wrote neither.
+  function agentAccount(node) {
     const hasMeta = node.meta && node.meta.length;
 
     if (!node.why && !hasMeta) return null;
@@ -2369,9 +2836,10 @@
           : el("span", { class: meta.key === "command" ? "mono" : "" }, meta.value)),
     ];
 
-    return inspectorSection("Agent's account", "chat",
+    return [
       node.why ? el("div", { class: "agent-says" }, agentTag("Why · agent says"), el("p", null, node.why)) : null,
-      hasMeta ? el("dl", { class: "kvs", style: { marginTop: node.why ? "10px" : 0 } }, node.meta.map(metaEntry)) : null);
+      hasMeta ? el("dl", { class: "kvs", style: { marginTop: node.why ? "10px" : 0 } }, node.meta.map(metaEntry)) : null,
+    ];
   }
 
   function testRow(test) {
@@ -2383,30 +2851,60 @@
       el("span", { class: "where" }, test.ref ? basename(test.ref.file || "") + linesText(test.ref) : ""));
   }
 
-  // The tests of a code node, or for a test node the nodes it tests.
-  function testsSection(node) {
-    if (node.kind === "test") {
-      const targets = testedBy(node.id);
+  // The `tests` edges a node's Tests tab lists: into a code node, or out of a test node.
+  const testEdges = (node) => (node.kind === "test" ? testedBy(node.id) : testsOf(node.id));
 
-      return inspectorSection(`Tests (${targets.length})`, "target",
-        targets.length
-          ? el("div", { class: "rel" }, targets.map((edge) => relationRow(edge, "out")))
-          : el("div", { class: "muted" }, "No `tests` edges from this test."));
+  // The tests of a code node, or for a test node the nodes it tests.
+  function testsList(node) {
+    const edges = testEdges(node);
+
+    if (node.kind === "test") {
+      return edges.length
+        ? el("div", { class: "rel" }, edges.map((edge) => relationRow(edge, "out")))
+        : el("div", { class: "muted" }, "No `tests` edges from this test.");
     }
 
-    const tests = testsOf(node.id);
     const emptyNote = node.change === "unchanged" ? "No tests attached." : "No test node has a `tests` edge to this node.";
 
-    return inspectorSection(`Tests (${tests.length})`, "test",
-      tests.length
-        ? el("div", { class: "rel" }, tests.map((edge) => testRow(nodeById.get(edge.from))))
-        : el("div", { class: "muted", style: { fontSize: "12.5px" } }, emptyNote));
+    return edges.length
+      ? el("div", { class: "rel" }, edges.map((edge) => testRow(nodeById.get(edge.from))))
+      : el("div", { class: "muted", style: { fontSize: "12.5px" } }, emptyNote);
+  }
+
+  function readButton(node) {
+    const isRead = isNodeRead(node.id);
+
+    return el("button", {
+      class: "read-btn" + (isRead ? " on" : ""),
+      title: isRead ? "Mark unread (r)" : "Mark read (r)",
+      "aria-pressed": String(isRead),
+      html: icon("check", "sm") + (isRead ? "Read" : "Mark read"),
+      onclick: () => toggleNodeRead(node.id),
+    });
+  }
+
+  // Tab bar over the active tab's content; tabs are { id, label, content() }.
+  function inspectorTabs(tabs) {
+    const active = tabs.find((tab) => tab.id === state.inspectorTab) || tabs[0];
+    const bar = el("div", { class: "seg ins-tabs", role: "tablist" }, tabs.map((tab) => el("button", {
+      class: tab === active ? "on" : "",
+      role: "tab",
+      "aria-selected": String(tab === active),
+      onclick: () => {
+        state.inspectorTab = tab.id;
+        renderInspector();
+      },
+    }, tab.label)));
+
+    return [bar, el("div", { class: "ins-sec ins-tab" }, active.content())];
   }
 
   function nodeInspector(node) {
     const status = node.result.status;
     const head = inspectorHead(kindIcon(node.kind), node.change, node.label, `${node.id} · ${node.kind}`, [changeBadge(node.change), statusBadge(status)]);
     const body = el("div", { class: "ins-body" });
+
+    head.insertBefore(readButton(node), head.lastChild);
 
     if (isProblemStatus(status)) body.appendChild(el("div", { class: "ins-sec" }, reasonCallout(node.result)));
     if (status === "agent") {
@@ -2415,38 +2913,40 @@
           el("div", null, "This node has no reference. Its existence and change state are the agent's word."))));
     }
 
-    if (node.ref) body.appendChild(inspectorSection("Location", "file", locationLine(node.ref, node.result)));
+    if (node.ref) body.appendChild(el("div", { class: "ins-sec" }, locationLine(node.ref, node.result)));
 
-    const account = agentAccountSection(node);
-
-    if (account) body.appendChild(account);
-
+    const account = agentAccount(node);
     // A ref finding that repeats the node's result is already shown in the callout.
     const repeatsRefResult = (finding) => finding.status && finding.path.endsWith("/ref") && node.result.codes && node.result.reason === finding.message;
     const nodeFindings = elementFindings(`/nodes/${nodeIndex.get(node.id)}`)
       .filter((finding) => !repeatsRefResult(finding))
       .filter((finding) => finding.level === "warning" || !finding.status);
-
-    if (nodeFindings.length) {
-      body.appendChild(inspectorSection("Findings", "alert", el("div", { class: "flist" }, nodeFindings.map((finding) => findingItem(finding, false)))));
-    }
-
-    body.appendChild(testsSection(node));
-
-    // `tests` edges are listed in the Tests section, not again as relations.
+    // `tests` edges are listed in the Tests tab, not again as relations.
     const isTest = node.kind === "test";
     const incoming = incomingEdges(node.id).filter((edge) => isTest || edge.kind !== "tests");
     const outgoing = outgoingEdges(node.id).filter((edge) => !isTest || edge.kind !== "tests");
+    const relationCount = incoming.length + outgoing.length;
+    const tabs = [
+      node.excerpt && {
+        id: "code",
+        label: node.change === "deleted" ? "Code (initial state)" : "Code",
+        content: () => excerptBox(node.excerpt, node.ref, { actualLine: node.result.actualLine }),
+      },
+      account && { id: "account", label: "Agent's account", content: () => account },
+      { id: "tests", label: `Tests ${testEdges(node).length}`, content: () => testsList(node) },
+      relationCount && {
+        id: "relations",
+        label: `Relations ${relationCount}`,
+        content: () => el("div", { class: "rel" }, incoming.map((edge) => relationRow(edge, "in")), outgoing.map((edge) => relationRow(edge, "out"))),
+      },
+      nodeFindings.length && {
+        id: "findings",
+        label: `Findings ${nodeFindings.length}`,
+        content: () => el("div", { class: "flist" }, nodeFindings.map((finding) => findingItem(finding, false))),
+      },
+    ].filter(Boolean);
 
-    if (incoming.length || outgoing.length) {
-      body.appendChild(inspectorSection("Relations", "graph",
-        el("div", { class: "rel" }, incoming.map((edge) => relationRow(edge, "in")), outgoing.map((edge) => relationRow(edge, "out")))));
-    }
-
-    if (node.excerpt) {
-      body.appendChild(inspectorSection(node.change === "deleted" ? "Code (initial state)" : "Code", "code",
-        excerptBox(node.excerpt, node.ref, { actualLine: node.result.actualLine })));
-    }
+    body.append(...inspectorTabs(tabs));
 
     return [head, body];
   }
@@ -2514,6 +3014,7 @@
     const head = inspectorHead("diff", file.status, basename(file.path), `${file.repo} › ${file.path}`, [
       changeBadge(file.status),
       el("span", { class: "badge " + COVERAGE_BADGE[hunk.coverage] }, HUNK_INSPECTOR_LABEL[hunk.coverage]),
+      hunkReviewControl(file, hunk),
     ]);
     const body = el("div", { class: "ins-body" });
 
@@ -2625,7 +3126,8 @@
         go: () => {
           const node = reviewData.nodes[+index];
 
-          if (state.view === "diff" || state.view === "claims") setView("graph");
+          if (isNonCode(node)) setView("other");
+          else if (state.view !== "graph" && state.view !== "flows") setView("graph");
           select({ type: "node", id: node.id });
         },
       };
@@ -2691,7 +3193,7 @@
   }
 
   // ── Keyboard ───────────────────────────────────────────────
-  const VIEW_KEYS = ["1", "2", "3", "4"];
+  const VIEW_KEYS = VIEWS.map((view, i) => String(i + 1));
 
   document.addEventListener("keydown", (event) => {
     const isTyping = event.target.closest && event.target.closest("input, textarea, select");
@@ -2711,9 +3213,13 @@
       }
     }
 
+    const isNodeSelected = state.selection && state.selection.type === "node" && nodeById.has(state.selection.id);
+
+    if (event.key === "r" && isPlainKey && isNodeSelected) toggleNodeRead(state.selection.id);
+
     const viewIndex = VIEW_KEYS.indexOf(event.key);
 
-    if (viewIndex >= 0 && isPlainKey) setView(VIEWS[viewIndex].id);
+    if (viewIndex >= 0 && isPlainKey && isViewShown(VIEWS[viewIndex])) setView(VIEWS[viewIndex].id);
   });
 
   // Graph colours are read from CSS variables, so an OS theme switch needs a redraw.

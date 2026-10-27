@@ -29,12 +29,12 @@
   --added: #15803d;
   --added-bg: #dcf5e4;
   --added-fill: #e3f7ea;
-  --modified: #1d5bd8;
-  --modified-bg: #dde8fd;
-  --modified-fill: #e6eefd;
-  --deleted: #be123c;
-  --deleted-bg: #fde4e9;
-  --deleted-fill: #fdeaee;
+  --modified: #a16207;
+  --modified-bg: #fdf1c7;
+  --modified-fill: #fdf8e3;
+  --deleted: #b91c1c;
+  --deleted-bg: #fde2e2;
+  --deleted-fill: #fdecec;
   --unchanged-fill: #ffffff;
 
   --row-add: rgba(34, 167, 84, 0.11);
@@ -65,8 +65,8 @@
     --ok: #4ade80; --ok-soft: rgba(74, 222, 128, 0.12); --bad: #f87171; --bad-soft: rgba(248, 113, 113, 0.13);
     --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, 0.12); --agent: #9a9aa6; --agent-soft: rgba(160, 160, 175, 0.1);
     --added: #4ade80; --added-bg: rgba(74, 222, 128, 0.14); --added-fill: #15291e;
-    --modified: #7aa7ff; --modified-bg: rgba(96, 150, 250, 0.16); --modified-fill: #172238;
-    --deleted: #fb7185; --deleted-bg: rgba(251, 113, 133, 0.15); --deleted-fill: #2e1820;
+    --modified: #facc15; --modified-bg: rgba(250, 204, 21, 0.15); --modified-fill: #2a2410;
+    --deleted: #f87171; --deleted-bg: rgba(248, 113, 113, 0.15); --deleted-fill: #2e1818;
     --unchanged-fill: #141418;
     --row-add: rgba(46, 160, 67, 0.15); --row-add-num: rgba(46, 160, 67, 0.25);
     --row-del: rgba(248, 81, 73, 0.13); --row-del-num: rgba(248, 81, 73, 0.22); --row-focus: rgba(129, 140, 248, 0.08);
@@ -85,8 +85,8 @@
   --ok: #4ade80; --ok-soft: rgba(74, 222, 128, 0.12); --bad: #f87171; --bad-soft: rgba(248, 113, 113, 0.13);
   --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, 0.12); --agent: #9a9aa6; --agent-soft: rgba(160, 160, 175, 0.1);
   --added: #4ade80; --added-bg: rgba(74, 222, 128, 0.14); --added-fill: #15291e;
-  --modified: #7aa7ff; --modified-bg: rgba(96, 150, 250, 0.16); --modified-fill: #172238;
-  --deleted: #fb7185; --deleted-bg: rgba(251, 113, 133, 0.15); --deleted-fill: #2e1820;
+  --modified: #facc15; --modified-bg: rgba(250, 204, 21, 0.15); --modified-fill: #2a2410;
+  --deleted: #f87171; --deleted-bg: rgba(248, 113, 113, 0.15); --deleted-fill: #2e1818;
   --unchanged-fill: #141418;
   --row-add: rgba(46, 160, 67, 0.15); --row-add-num: rgba(46, 160, 67, 0.25);
   --row-del: rgba(248, 81, 73, 0.13); --row-del-num: rgba(248, 81, 73, 0.22); --row-focus: rgba(129, 140, 248, 0.08);
@@ -146,6 +146,15 @@ svg.i.lg { width: 18px; height: 18px; }
 .pill.bad.has b { color: var(--bad); }
 .pill.warn.has { background: var(--warn-soft); border-color: transparent; }
 .pill.warn.has b { color: var(--warn); }
+.pill.read { cursor: default; }
+.pill.read svg { color: var(--text-3); }
+.pill.read.done svg, .pill.read.done b { color: var(--ok); }
+.read-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; flex: none; border-radius: 7px; border: 1px solid var(--border-strong);
+  background: var(--panel); color: var(--text-2); font: 500 12px var(--font); cursor: pointer; white-space: nowrap;
+}
+.read-btn:hover { border-color: var(--ok); color: var(--ok); }
+.read-btn.on { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .icon-btn {
   width: 30px; height: 30px; display: grid; place-items: center; border-radius: 7px; border: 1px solid transparent;
   background: transparent; color: var(--text-2); cursor: pointer;
@@ -318,6 +327,10 @@ svg.i.lg { width: 18px; height: 18px; }
 /* Fades in step with the canvas nodes' 120ms opacity transition. */
 .gn, .gl { transition: opacity 0.12s; }
 .gn.entering, .gl.entering { opacity: 0; }
+/* A read node keeps its colors but steps back, with a check in its corner. */
+.gn .rd, .ncard .rd { position: absolute; right: 6px; bottom: 4px; color: var(--ok); }
+.gn .rd svg, .ncard .rd svg { width: 12px; height: 12px; }
+.gn.read .tx, .gn.read .ic, .ncard.read .tx, .ncard.read .ic { opacity: 0.55; }
 .gl { position: absolute; display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); white-space: nowrap; }
 .gl .role { text-transform: none; letter-spacing: 0; font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
 .graph-controls { position: absolute; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); }
@@ -389,10 +402,13 @@ svg.i.lg { width: 18px; height: 18px; }
 .flow-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .flow-head h3 { margin: 0; font-size: 14px; font-weight: 650; }
 .flow-head .meta { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+.flow.folded .flow-head { border-bottom: 0; }
+.flow.reviewed .flow-head h3 { color: var(--text-2); }
+.flow-head .chev svg { transition: transform 0.12s; }
+.flow.reviewed:not(.folded) .flow-head .chev svg { transform: rotate(90deg); }
 .lane { display: flex; align-items: flex-start; padding: 22px 20px 20px; overflow-x: auto; gap: 0; background-image: linear-gradient(var(--panel-2), var(--panel-2)); }
 .step { display: flex; flex-direction: column; align-items: center; gap: 0; flex: none; }
-.step-n { font: 10.5px var(--mono); color: var(--text-3); margin-bottom: 6px; align-self: flex-start; padding-left: 4px; }
-.connector { flex: none; width: 92px; height: 54px; margin-top: 22px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+.connector { flex: none; width: 92px; height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
 .connector .line { width: 100%; height: 0; border-top: 2px solid var(--text-3); position: relative; }
 .connector .line::after { content: ""; position: absolute; right: -1px; top: -6px; border: 5px solid transparent; border-left: 7px solid var(--text-3); border-right: 0; }
 .connector.rev .line::after { right: auto; left: -1px; border-left: 0; border-right: 7px solid var(--text-3); }
@@ -401,13 +417,25 @@ svg.i.lg { width: 18px; height: 18px; }
 .connector.contradicted .line { border-top-color: var(--bad); }
 .connector.contradicted .line::after { border-left-color: var(--bad); }
 .connector.unresolved .line { border-top: 2px dashed var(--warn); }
-.connector .ek { position: absolute; top: 4px; font-size: 10.5px; color: var(--text-2); background: var(--panel-2); padding: 0 5px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-.connector .ek:hover { color: var(--accent-text); }
-.attached { display: flex; flex-direction: column; align-items: center; margin-top: 0; }
-.attached .stem { width: 0; height: 16px; border-left: 2px dotted var(--border-strong); }
-.attached .ncard { width: 200px; min-height: 46px; }
-.attached .ncard + .stem { height: 8px; }
-.flow-foot { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--text-2); }
+.connector .ek, .dag-canvas .ek { position: absolute; top: 4px; font-size: 10.5px; color: var(--text-2); background: var(--panel-2); padding: 0 5px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.connector .ek:hover, .dag-canvas .ek:hover { color: var(--accent-text); }
+/* A flow drawn as a graph: ELK places the cards, an SVG layer below draws the edges. */
+.lane.dag { display: block; }
+.dag-canvas { position: relative; min-height: 58px; }
+.dag-canvas.pending { visibility: hidden; }
+.dag-step { position: absolute; }
+.dag-step.gap .ncard { outline: 2px dashed var(--warn); outline-offset: 3px; }
+.dag-edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.dag-edge { color: var(--text-3); }
+.dag-edge polyline { fill: none; stroke: currentColor; stroke-width: 2; stroke-dasharray: 2 4; }
+.dag-edge polygon { fill: currentColor; }
+.dag-edge.verified { color: var(--text-2); }
+.dag-edge.verified polyline { stroke-dasharray: none; }
+.dag-edge.contradicted { color: var(--bad); }
+.dag-edge.contradicted polyline { stroke-dasharray: none; }
+.dag-edge.unresolved { color: var(--warn); }
+.dag-edge.unresolved polyline { stroke-dasharray: 6 4; }
+.dag-canvas .ek { transform: translate(-50%, -50%); z-index: 1; }
 
 /* ── Diff map ────────────────────────────────────────────── */
 .diffmap { padding: 20px 24px 40px; display: grid; gap: 18px; }
@@ -442,6 +470,9 @@ svg.i.lg { width: 18px; height: 18px; }
 .track { position: relative; height: 14px; border-radius: 4px; background: var(--panel-3); overflow: hidden; }
 .track .seg-h { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 2px; }
 .fnums { text-align: right; font: 11.5px var(--mono); white-space: nowrap; }
+.fnums .rd { color: var(--ok); margin-right: 6px; vertical-align: -2px; }
+.frow.reviewed .fpath .base { color: var(--text-2); }
+.code-note .read-btn { margin-left: 10px; font-style: normal; }
 .hunks { padding: 12px 16px 16px 58px; display: grid; gap: 12px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
 .hunk { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--panel); }
 .hunk.uncovered { border-color: color-mix(in srgb, var(--bad) 55%, transparent); box-shadow: inset 3px 0 0 var(--bad); }
@@ -456,6 +487,8 @@ svg.i.lg { width: 18px; height: 18px; }
 .chip:hover { border-color: var(--accent); color: var(--accent-text); }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; }
 .chip.test { border-radius: 11px; }
+.chip .rd { color: var(--ok); display: inline-flex; }
+.chip.read { color: var(--text-2); }
 
 /* ── Code ────────────────────────────────────────────────── */
 .code-box { border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--panel); }
@@ -533,6 +566,9 @@ table.code mark { background: color-mix(in srgb, #facc15 45%, transparent); colo
 .ins-sec { padding: 12px 0; }
 .ins-sec + .ins-sec { border-top: 1px solid var(--border); }
 .ins-sec h4 { margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); display: flex; align-items: center; gap: 6px; }
+.ins-head .read-btn { margin-top: 2px; }
+.ins-tabs { margin-top: 12px; flex-wrap: wrap; }
+.ins-sec.ins-tab { padding-top: 10px; }
 .callout { display: flex; gap: 10px; padding: 10px 12px; border-radius: 9px; font-size: 12.5px; }
 .callout svg { margin-top: 1px; }
 .callout.bad { background: var(--bad-soft); }
@@ -602,3 +638,20 @@ table.code mark { background: color-mix(in srgb, #facc15 45%, transparent); colo
   .hunks { padding-left: 16px; }
   .ev-row, .ev-body { padding-left: 16px; }
 }
+
+/* ── Docs & config ───────────────────────────────────────── */
+.others { padding: 20px 24px 40px; display: grid; gap: 18px; }
+.orow {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 16px; border: 0; border-bottom: 1px solid var(--border);
+  background: none; color: var(--text); font: 12.5px var(--font); text-align: left; cursor: pointer;
+}
+.orow:last-child { border-bottom: 0; }
+.orow:hover { background: var(--hover); }
+.orow.sel { background: var(--accent-soft); }
+.orow .rd { color: var(--text-3); display: inline-flex; }
+.orow.read .rd { color: var(--ok); }
+.orow.read .lb { color: var(--text-2); }
+.orow .otx { flex: 1; min-width: 0; }
+.orow .lb { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orow .why { color: var(--text-3); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orow .where { flex: none; font: 11px var(--mono); color: var(--text-3); white-space: nowrap; }

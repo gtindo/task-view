@@ -3,7 +3,38 @@
   "exitCode": 0,
   "schemaVersion": 1,
   "errors": [],
-  "warnings": [],
+  "warnings": [
+    {
+      "code": "node_not_in_flow",
+      "path": "/nodes/1",
+      "message": "modified node \"fn-b\" is on no flow",
+      "hint": "add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"
+    },
+    {
+      "code": "node_not_in_flow",
+      "path": "/nodes/2",
+      "message": "modified node \"const-c\" is on no flow",
+      "hint": "add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"
+    },
+    {
+      "code": "node_not_in_flow",
+      "path": "/nodes/5",
+      "message": "modified node \"ren\" is on no flow",
+      "hint": "add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"
+    },
+    {
+      "code": "node_not_in_flow",
+      "path": "/nodes/7",
+      "message": "added node \"untracked\" is on no flow",
+      "hint": "add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"
+    },
+    {
+      "code": "node_not_in_flow",
+      "path": "/nodes/10",
+      "message": "modified node \"mock-h\" is on no flow",
+      "hint": "add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"
+    }
+  ],
   "summary": {
     "verified": 19,
     "contradicted": 0,

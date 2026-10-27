@@ -277,28 +277,17 @@
   ],
   "flows": [
     {
-      "id": "read-after",
-      "path": [
-        "builder-excerpt",
-        "excerpt-struct",
-        "after-rows",
-        "excerpt-box",
-        "code-table"
-      ],
-      "tests": [
-        "test-open-writes-page"
-      ],
-      "title": "Reviewer reads a node's code after the change"
-    },
-    {
-      "id": "switch-tab",
+      "id": "inspector-code",
       "path": [
         "node-inspector",
         "excerpt-box",
-        "code-mode-pref"
+        "code-mode-pref",
+        "after-rows",
+        "excerpt-struct",
+        "builder-excerpt",
+        "code-table"
       ],
-      "tests": [],
-      "title": "Reviewer switches the code tab"
+      "title": "Reviewer opens a node: its code box reads the page data, the After rows and the remembered tab"
     }
   ],
   "claims": [

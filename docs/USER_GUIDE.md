@@ -240,15 +240,16 @@ way everywhere:
 | Unresolved | Amber dashed border, ? | The file, line range or commit could not be found |
 | Agent statement | Dotted gray border, italic | Nothing to check: no reference, or the agent's explanation (`why`, test results, notes) |
 
-The fill shows the change: green **added**, blue **modified**, red **deleted**,
-outlined only for **unchanged**. Test nodes are rounded and carry an
+The fill shows the change: green **added**, yellow **modified**, red **deleted**,
+outlined only for **unchanged**. A node you marked read carries a check in its
+corner and fades back. Test nodes are rounded and carry an
 "agent says: passed / failed / not run" badge: the tool never runs tests, so a
 test result is always the agent's word.
 
 ### Layout
 
-- **Top bar:** the status counts and the number of errors and warnings. Click
-  a count to list those findings. The button at the far left hides the side
+- **Top bar:** the status counts, the number of errors and warnings, and how
+  many nodes you marked read. Click a count to list those findings. The button at the far left hides the side
   panel; the button at the far right switches between auto, light and dark
   themes.
 - **Red banner:** only when the review file still has errors. The page still
@@ -258,21 +259,27 @@ test result is always the agent's word.
   to the final state, the findings grouped by kind, and the agent's notes.
   Drag its right edge to resize it; double-click the edge to reset its width.
 - **Inspector (right):** opens when you click a node, an edge, a hunk or a
-  finding group. For a node it shows where it is, why it changed in the agent's
-  words, which tests cover it, how it relates to other nodes, and the code with
-  the changed lines highlighted. The code box has two tabs: **Diff** shows the
-  changed lines with what they replaced, **After** shows the whole function
-  (or file) as it reads after the change. Drag its left edge to widen it for long code
+  finding group. For a node it shows where it is and a **Mark read** button
+  (or press `r`), then tabs: **Code** first, with the changed lines
+  highlighted, then the agent's account (why it changed), its tests, its
+  relations to other nodes and its findings. The code box has two tabs of its
+  own: **Diff** shows the changed lines with what they replaced, **After**
+  shows the whole function (or file) as it reads after the change. Drag its left edge to widen it for long code
   lines; double-click the edge to reset its width.
 
-### The four views
+### The views
 
 | View | Use it to |
 | --- | --- |
-| **Graph** | See the whole change at once. Nodes are grouped by repo; endpoints sit between repos. Click a node to focus on it and its neighbours. Use the search box (or `/`) to find a node; Enter jumps to it. Toggle unchanged, test, doc and import nodes (tests, docs and import lines start hidden), switch the direction, zoom with the buttons or the trackpad. |
-| **Flows** | Follow each user-visible path step by step, left to right, with the tests hanging under the steps they cover. A dotted connector means the agent gave no reference for that link. |
-| **Diff map** | Check that nothing was left out. Every changed file has a bar showing its hunks: green covered by a node, amber partly covered, red not mentioned at all. Expand a file to read its hunks. "Needs attention" shows only files with gaps; the commit menu (or clicking a commit in the side panel) shows what each commit wrote. |
+| **Flows** | Start here: the page opens on this view. Follow what each entry (a screen, a button, a command, an endpoint) reaches, drawn as a small graph from the entry rightwards, with a branch wherever the code fans out. Edge labels say how two steps relate; click one to see the line it rests on. A dotted edge means the agent gave no reference for that link; a dashed outline marks a step the entry does not reach. Tests are not drawn here: read them in the graph or a node's Tests tab. The head counts the steps you read; **Mark reviewed** folds a flow you are done with. |
+| **Graph** | See the whole change at once. Nodes are grouped by repo; endpoints sit between repos. Click a node to focus on it and its neighbours. Use the search box (or `/`) to find a node; Enter jumps to it. Toggle unchanged, test and import nodes (tests and import lines start hidden), switch the direction, zoom with the buttons or the trackpad. Docs and standalone config live in their own view. |
+| **Diff map** | Check that nothing was left out. Every changed file has a bar showing its hunks: green covered by a node, amber partly covered, red not mentioned at all. Expand a file to read its hunks. "Needs attention" shows only files with gaps; the commit menu (or clicking a commit in the side panel) shows what each commit wrote. A file counts as reviewed once every node covering its hunks is read; mark a hunk no node covers with its own **Mark reviewed** button. The summary shows files reviewed and left to review, and **Hide reviewed** leaves only what you still have to read. |
 | **Claims** | Check statements you might doubt ("the index is unique", "import needs no change"). Expand a piece of evidence to see the exact code or commit it points at. |
+| **Docs & config** | Read the nodes that never link to code: documentation, and config files no code node uses. Listed by kind; click one to open it in the inspector. Only shown when the review has such nodes. |
+
+Read and reviewed marks are kept in your browser per review file, so they
+survive `task-view open` regenerating the page. A mark is dropped when the
+code it covered changed since you read it.
 
 ### Findings worth your attention
 
@@ -280,6 +287,7 @@ test result is always the agent's word.
 | --- | --- |
 | Contradicted or unresolved references | The account is wrong somewhere: send it back to the agent |
 | Unmentioned changes | Lines changed that no node describes: the agent didn't tell you about them |
+| Code outside the flows | A changed function or component on no flow (`node_not_in_flow`), or a flow step its entry does not reach (`flow_gap`): the flows don't show how that code runs |
 | Unreferenced test code | Test-file changes outside every test case the agent listed (an edited assertion, a helper) |
 | Work outside the review | Uncommitted files or later commits that this review does not cover |
 | Unlisted repos | Only with `--scan-siblings`: neighbouring repos with uncommitted changes that the review doesn't list. Usually unrelated; check if the change could have touched them |
@@ -288,8 +296,9 @@ test result is always the agent's word.
 
 | Key | Action |
 | --- | --- |
-| `1` `2` `3` `4` | Graph, Flows, Diff map, Claims |
+| `1` `2` `3` `4` `5` | Flows, Graph, Diff map, Claims, Docs & config |
 | `/` | Find a node (graph) |
+| `r` | Mark the selected node read or unread |
 | `[` | Hide or show the side panel |
 | `Esc` | Close the inspector |
 

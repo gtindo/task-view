@@ -162,7 +162,7 @@ grounded in the real diff and which rest on the agent's word:
 | Unresolved | Amber dashed border, ? | The file, line range or commit could not be found |
 | Agent statement | Dotted gray border, italic | Nothing to check: no reference, or the agent's own explanation |
 
-The fill shows the change itself: green **added**, blue **modified**, red
+The fill shows the change itself: green **added**, yellow **modified**, red
 **deleted**, outline only for **unchanged**. The side panel always shows the
 agent's summary, each repo's commits from base to final state, the findings
 and the agent's notes.
@@ -171,30 +171,34 @@ The screenshots below are the review from the
 [live demo](https://gtindo.github.io/task-view/): one commit of this
 repository, described by an agent.
 
+### Flows
+
+The page opens here: one card per entry the change affects (a screen, a
+button, a command, an endpoint), drawn as a small graph of the code it
+reaches, with a branch wherever that code fans out. Tests are read in the
+graph.
+
+![The flows view: two lanes of steps, one with a test attached and marked "agent says: passed"](docs/images/flows.png)
+
 ### Graph
 
 The whole change at a glance: source-code nodes grouped by repo, endpoints
-between repos. Tests, docs, import lines and unchanged nodes sit behind the toolbar
-switches. Search with `/`, click a node to focus on it and its neighbours.
+between repos. Tests, import lines and unchanged nodes sit behind the toolbar
+switches; docs and standalone config get their own **Docs & config** list. Search with `/`, click a node to focus on it and its neighbours.
 
 ![The graph view of a review: changed functions and components, grouped by repo, with the relations between them](docs/images/graph.png)
 
 ### Inspector
 
-Click any node, edge, hunk or finding to open it on the right: where it is,
-why it changed in the agent's words, which tests cover it, how it relates to
-other nodes, and its code. The code box switches between **Diff** (changed
+Click any node, edge, hunk or finding to open it on the right. A node opens
+on its code, with tabs for why it changed in the agent's words, which tests
+cover it, how it relates to other nodes and its findings; **Mark read** (or
+`r`) records that you read it, and the diff map and flows track that
+progress. The code box switches between **Diff** (changed
 lines with what they replaced) and **After** (the code as it reads after the
 change).
 
 ![The inspector open on an added function, showing its verified location, the agent's reason, its relations and its diff](docs/images/inspector.png)
-
-### Flows
-
-One lane per user- or caller-visible path through the change, left to right,
-with the tests that exercise it hanging under the steps they cover.
-
-![The flows view: two lanes of steps, one with a test attached and marked "agent says: passed"](docs/images/flows.png)
 
 ### Diff map
 

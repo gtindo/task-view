@@ -66,6 +66,7 @@ var Catalog = map[string]CodeInfo{
 	"unknown_repo":        {LevelError, ExitSchema, "", "Unknown repo"},
 	"bad_path":            {LevelError, ExitSchema, "", "Bad path"},
 	"unknown_language":    {LevelError, ExitSchema, "", "Unknown language"},
+	"not_flow_step":       {LevelError, ExitSchema, "", "Not a flow step"},
 
 	"git_not_found":  {LevelError, ExitEnv, "", "git not found"},
 	"repo_not_found": {LevelError, ExitEnv, "", "Repo not found"},
@@ -94,6 +95,9 @@ var Catalog = map[string]CodeInfo{
 	"no_language":            {LevelWarning, ExitOK, "", "No language"},
 	"missing_why":            {LevelWarning, ExitOK, "", "Missing why"},
 	"empty_change":           {LevelWarning, ExitOK, "", "Empty change"},
+	"flow_gap":               {LevelWarning, ExitOK, "", "Flow gap"},
+	"flow_without_code":      {LevelWarning, ExitOK, "", "Flow without code"},
+	"node_not_in_flow":       {LevelWarning, ExitOK, "", "Node not in a flow"},
 }
 
 // NewFinding builds a finding with the level taken from the catalog.

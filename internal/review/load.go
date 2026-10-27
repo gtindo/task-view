@@ -264,6 +264,9 @@ func (r *Review) crossCheck() []Finding {
 	findings = append(findings, checkFlowIDs(r.Flows)...)
 	findings = append(findings, checkEdgeNodes(r.Edges, nodesByID)...)
 	findings = append(findings, checkFlowNodes(r.Flows, nodesByID)...)
+	findings = append(findings, checkFlowSteps(r.Flows, nodesByID)...)
+	findings = append(findings, checkFlowConnected(r.Flows, r.Edges)...)
+	findings = append(findings, checkFlowCoverage(r.Nodes, r.Flows)...)
 	findings = append(findings, checkClaimNodes(r.Claims, nodesByID)...)
 	findings = append(findings, checkRefs(r.AllRefs(), repoIDs)...)
 
@@ -383,6 +386,133 @@ func checkFlowNodes(flows []*Flow, nodesByID map[string]*Node) []Finding {
 					"list only nodes of kind `test` in flow tests; put other nodes in `path`"))
 			}
 		}
+	}
+
+	return findings
+}
+
+// checkFlowSteps reports flow steps of a kind that never sits on a flow, and
+// flows with no code to walk through. Unknown ids are left to checkFlowNodes.
+func checkFlowSteps(flows []*Flow, nodesByID map[string]*Node) []Finding {
+	var findings []Finding
+
+	for i, flow := range flows {
+		for j, id := range flow.Path {
+			node := nodesByID[id]
+			if node == nil || node.CanBeFlowStep() {
+				continue
+			}
+
+			findings = append(findings, NewFinding("not_flow_step", fmt.Sprintf("/flows/%d/path/%d", i, j),
+				fmt.Sprintf("node %q has kind %q, which never sits on a flow", id, node.Kind),
+				"keep only code in `path`: tests reach code through `tests` edges; docs, config and imports stay off flows"))
+		}
+
+		hasCode := slices.ContainsFunc(flow.Path, func(id string) bool {
+			node := nodesByID[id]
+
+			return node != nil && node.IsFlowSubject()
+		})
+		if !hasCode {
+			findings = append(findings, NewFinding("flow_without_code", fmt.Sprintf("/flows/%d", i),
+				fmt.Sprintf("flow %q has no code, component or entry node", flow.ID),
+				"add the code its entry runs to `path`, or drop the flow"))
+		}
+	}
+
+	return findings
+}
+
+// checkFlowConnected reports flow steps the entry cannot reach through edges
+// between the flow's own nodes.
+func checkFlowConnected(flows []*Flow, edges []*Edge) []Finding {
+	var findings []Finding
+
+	for i, flow := range flows {
+		reached := reachableSteps(flow.Path, edges)
+
+		for j, id := range flow.Path {
+			if reached[id] {
+				continue
+			}
+
+			findings = append(findings, NewFinding("flow_gap", fmt.Sprintf("/flows/%d/path/%d", i, j),
+				fmt.Sprintf("flow %q: no edges between its nodes join %q to the entry %q", flow.ID, id, flow.Path[0]),
+				"add the edge that links this node to the flow, or the unchanged node between them (rule 6 under Nodes)"))
+		}
+	}
+
+	return findings
+}
+
+// reachableSteps returns the steps of path that its first step reaches
+// through edges with both ends in path. Edges count in either direction,
+// since a flow runs against some of them (an endpoint reaches the handler
+// that serves it); `tests` edges never join steps.
+func reachableSteps(path []string, edges []*Edge) map[string]bool {
+	if len(path) == 0 {
+		return map[string]bool{}
+	}
+
+	inFlow := map[string]bool{}
+	for _, id := range path {
+		inFlow[id] = true
+	}
+
+	neighbours := map[string][]string{}
+
+	for _, edge := range edges {
+		joinsSteps := edge.Kind != EdgeTests && inFlow[edge.From] && inFlow[edge.To]
+		if !joinsSteps {
+			continue
+		}
+
+		neighbours[edge.From] = append(neighbours[edge.From], edge.To)
+		neighbours[edge.To] = append(neighbours[edge.To], edge.From)
+	}
+
+	reached := map[string]bool{path[0]: true}
+	queue := []string{path[0]}
+
+	for len(queue) > 0 {
+		step := queue[0]
+		queue = queue[1:]
+
+		for _, next := range neighbours[step] {
+			if reached[next] {
+				continue
+			}
+
+			reached[next] = true
+			queue = append(queue, next)
+		}
+	}
+
+	return reached
+}
+
+// checkFlowCoverage reports added or modified code that no flow walks
+// through, so the flows cover the whole change. Deleted code no longer runs.
+func checkFlowCoverage(nodes []*Node, flows []*Flow) []Finding {
+	onFlow := map[string]bool{}
+
+	for _, flow := range flows {
+		for _, id := range flow.Path {
+			onFlow[id] = true
+		}
+	}
+
+	var findings []Finding
+
+	for i, node := range nodes {
+		isRunningChange := node.IsChanged() && node.Change != ChangeDeleted
+		if !isRunningChange || !node.IsFlowSubject() || onFlow[node.ID] {
+			continue
+		}
+
+		findings = append(findings, NewFinding("node_not_in_flow", fmt.Sprintf("/nodes/%d", i),
+			fmt.Sprintf("%s node %q is on no flow", node.Change, node.ID),
+			"add it to the `path` of the flow whose entry reaches it; a flow may branch, so add a branch rather than a new flow"))
 	}
 
 	return findings
